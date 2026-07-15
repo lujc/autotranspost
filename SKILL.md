@@ -1,9 +1,9 @@
 ---
-name: jzsub
-description: JZSub downloads maximum-quality videos, covers, and source subtitles from YouTube, Bilibili, and other yt-dlp platforms; translates foreign subtitles with the active session model; creates bilingual captions; and burns them into MP4. Use for video download, video-only or subtitle-only delivery, Chrome-authenticated download, bilingual subtitles, or hard-burned caption delivery.
+name: autopublish
+description: AutoPublish downloads maximum-quality videos, covers, and source subtitles from YouTube, Bilibili, and other yt-dlp platforms; translates foreign subtitles with the active session model; creates bilingual captions; burns them into MP4; and can OPT-IN publish the finished bilingual video to Bilibili. Use for video download, video-only or subtitle-only delivery, Chrome-authenticated download, bilingual subtitles, hard-burned caption delivery, or Bilibili auto-publish.
 ---
 
-# JZSub
+# AutoPublish
 
 Process one authorized video per job directory and finish the whole applicable pipeline.
 
@@ -152,7 +152,7 @@ Conventions:
 - Commit message = `<area>: <what changed>` (e.g. `burn:`, `render:`, `docs:`, `skill:`).
 - Commit BEFORE and AFTER a functional change so the diff is reviewable.
 - Tag stable baselines (e.g. `v1.0`) so they can be restored with `git checkout v1.0`.
-- A repo-local git identity (`jzsub-skill <jzsub@local>`) is set automatically on the first commit; override with `git config user.name/user.email` if you prefer your own.
+- A repo-local git identity (`autopublish-skill <autopublish@local>`) is set automatically on the first commit; override with `git config user.name/user.email` if you prefer your own.
 
 ## Publish to Bilibili (opt-in)
 

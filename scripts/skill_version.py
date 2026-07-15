@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Lightweight git version-management helper for the jzsub skill.
+"""Lightweight git version-management helper for the autopublish skill.
 
-The jzsub skill directory IS a git repository. This script wraps the
+The autopublish skill directory IS a git repository. This script wraps the
 common versioning operations so skill edits can be snapshotted and rolled
 back without remembering git plumbing.
 
@@ -54,9 +54,9 @@ def _ensure_repo():
     rc_name, name, _ = _run(["config", "user.name"], check=False)
     rc_mail, mail, _ = _run(["config", "user.email"], check=False)
     if rc_name != 0 or not name.strip() or rc_mail != 0 or not mail.strip():
-        _run(["config", "user.name", "jzsub-skill"], check=True)
-        _run(["config", "user.email", "jzsub@local"], check=True)
-        print("note: set repo-local git identity (jzsub-skill <jzsub@local>)")
+        _run(["config", "user.name", "autopublish-skill"], check=True)
+        _run(["config", "user.email", "autopublish@local"], check=True)
+        print("note: set repo-local git identity (autopublish-skill <autopublish@local>)")
     return True
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """publish_bilibili.py — upload + submit a finished bilingual MP4 to Bilibili.
 
-This is an OPT-IN feature of the jzsub skill. It is NEVER called automatically;
+This is an OPT-IN feature of the autopublish skill. It is NEVER called automatically;
 the user must explicitly ask to publish.
 
 Subcommands:
@@ -264,6 +264,19 @@ def _auto_video(job: Path) -> Path | None:
     return None
 
 
+def _manifest_source(job: Path) -> tuple[str, str]:
+    """Return (title, source_url) from download-manifest.json, or ('', '')."""
+    mpath = job / "download-manifest.json"
+    if not mpath.exists():
+        return "", ""
+    try:
+        m = json.loads(mpath.read_text(encoding="utf-8"))
+    except Exception:
+        return "", ""
+    src = m.get("source") or {}
+    return str(src.get("title", "")), str(src.get("url", ""))
+
+
 def _load_meta(meta_path: Path, video_path: Path, job: Path) -> dict:
     if meta_path.exists():
         try:
@@ -272,18 +285,21 @@ def _load_meta(meta_path: Path, video_path: Path, job: Path) -> dict:
             sys.stderr.write(f"读取 meta 失败：{e}\n")
             sys.exit(1)
     # Build a default meta next to the video, for the user to edit.
+    # Pull title + source URL from the job manifest when present so a
+    # copyright=2 (转载) submission has the required source link.
+    m_title, m_source = _manifest_source(job)
     default = {
-        "title": video_path.stem,
+        "title": m_title or video_path.stem,
         "desc": "",
         "dynamic": "",
         "tag": "双语字幕,翻译",
         "tid": 201,
         "copyright": 2,
-        "source": "",
+        "source": m_source,
         "no_reprint": 0,
         "cover": "",
         "subtitles": {"lan": "", "open": 0},
-        "part_title": video_path.stem,
+        "part_title": m_title or video_path.stem,
         "part_desc": "",
     }
     meta_path.write_text(
