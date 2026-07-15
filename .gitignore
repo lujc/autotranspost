@@ -1,0 +1,38 @@
+# ===== Python cache / bytecode =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+
+# ===== OS / editor junk =====
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ===== Local runtime / temp artifacts (never part of the skill) =====
+*.log
+tmp/
+.cache/
+cache/
+__tmp__/
+*.bak
+
+# ===== Virtual environments (if tooling venv is placed in the skill dir) =====
+.venv/
+venv/
+env/
+
+# ===== Working outputs / downloaded media =====
+# Job artifacts (masters, subtitles, burned videos) live OUTSIDE the skill dir
+# (under the caller's workspace jzsub_jobs/). Keep the skill repo source-only.
+*.mp4
+*.mkv
+*.m4a
+*.opus
+*.ass
+*.srt
+downloaded_*/
+output_*/
