@@ -194,7 +194,11 @@ def _qr_poll(session: requests.Session, qrcode_key: str, timeout: int) -> None:
         except Exception as e:
             time.sleep(3)
             continue
-        code = j.get("code")
+        # NOTE: the poll endpoint always returns outer code==0; the real
+        # login status lives in data.code (0=success, 86038=expired,
+        # 86090=scanned-awaiting-confirm, 86101=not-scanned).
+        data = j.get("data") or {}
+        code = data.get("code", j.get("code"))
         if code == 0:
             cred = _extract_cookies(session, j)
             if cred.get("sessdata"):
@@ -212,12 +216,12 @@ def _qr_poll(session: requests.Session, qrcode_key: str, timeout: int) -> None:
         elif code == 86038:
             sys.stderr.write("二维码已过期，请重新运行 login --generate。\n")
             sys.exit(1)
-        elif code in (86090, 86101, 86102, -1, 0):
+        elif code in (86090, 86101, 86102, -1):
             # 86101 未扫描 / 86090 已扫描待确认 / 86102 扫描中 / -1 等待
             time.sleep(2)
             continue
         else:
-            sys.stderr.write(f"未知轮询状态 code={code} msg={j.get('message')}\n")
+            sys.stderr.write(f"未知轮询状态 code={code} msg={data.get('message')}\n")
             time.sleep(2)
             continue
     sys.stderr.write("登录超时，请重试。\n")
@@ -444,10 +448,11 @@ def _upload_and_submit(
         try:
             resp = video.video_submit(data, verify)
             last = resp
-            if isinstance(resp, dict) and resp.get("code") == 0:
-                d = resp.get("data") or {}
+            # Success: bilibili returns {"aid":..., "bvid":...} (no code field).
+            if isinstance(resp, dict) and resp.get("bvid"):
                 print(
-                    f"投稿成功：BV{d.get('bvid', '?')} (aid={d.get('aid', '?')})"
+                    f"投稿成功：BV{resp.get('bvid')} "
+                    f"(aid={resp.get('aid', '?')})"
                 )
                 return
             sys.stderr.write(f"  投稿返回异常（第 {attempt} 次）：{resp}\n")
@@ -455,6 +460,14 @@ def _upload_and_submit(
             sys.stderr.write(f"  投稿失败（第 {attempt} 次）：{e}\n")
         if attempt < 3:
             time.sleep(3 * attempt)
+    # If the last response still carries a bvid, treat it as success (some
+    # error shapes wrap a valid bvid, e.g. rate-limit on a retry).
+    if isinstance(last, dict) and last.get("bvid"):
+        print(
+            f"投稿成功（重试末次）：BV{last.get('bvid')} "
+            f"(aid={last.get('aid', '?')})"
+        )
+        return
     sys.stderr.write(f"投稿最终失败，最后响应：{last}\n")
     sys.exit(1)
 
