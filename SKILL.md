@@ -161,7 +161,7 @@ with `scripts/publish_bilibili.py`. **This is opt-in: never run it unless
 the user explicitly asks to publish.** Dependencies (install once into the
 managed venv): `pip install bilibili-api` and `qrcode[pillow]`.
 
-Current version: **v1.1** (login + submit response-parsing fixes; see git tags).
+Current version: **v1.2** (--cn-title + Chinese cover badge; login/submit parsing fixes; see git tags).
 
 Auth — QR login (caches only `SESSDATA`/`bili_jct`/`buvid3`, git-ignored,
 never printed):
