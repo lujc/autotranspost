@@ -48,6 +48,18 @@ Authentication behavior:
 - Use `chrome:Profile 1` only when the user identifies that profile.
 - Load Chrome control only when login/CAPTCHA needs user interaction. Do not open the video merely to obtain cookies.
 
+Bypassing YouTube's "Sign in to confirm you're not a bot" wall (anonymous):
+
+- Anonymous fetches default to the `android` YouTube player client, which is the most
+  reliable way to avoid the bot check for metadata and many videos.
+- When the network needs a proxy (e.g. a local Clash/V2Ray on `127.0.0.1:7890`), pass
+  `--proxy http://127.0.0.1:7890`. The proxy only changes the network path; it does
+  NOT bypass the bot wall for videos YouTube has explicitly flagged (those still require login).
+- A JS runtime is required for signature decryption. Prefer `--js-runtime <node.exe>`
+  (a Node.js binary, e.g. the managed `node.exe`) over `--allow-remote-ejs` (which needs Deno).
+- Some individual videos are hard-flagged and cannot be fetched without cookies regardless of
+  client/proxy; fall back to `--browser-cookies chrome` in that case (never export cookies.txt).
+
 The fetcher selects best video+audio, keeps a codec-preserving source, remuxes MP4 when compatible, downloads JPEG cover, chooses original-language manual captions before automatic captions, and writes `download-manifest.json`. Use its localized delivery names unchanged: the default Chinese target writes `封面.jpg` and returns a `burn_output` such as `双语字幕版「视频名」.mp4`.
 
 All subtitle tracks are automatically segmented by sentence boundary: complete sentences ending with punctuation (! . ? 。！？…) are kept as one display unit. Consecutive cues within 2 s of each other are joined into a single caption as long as the total duration stays under 10 s and the text width under 100 characters. This avoids splitting a sentence across multiple subtitle frames.

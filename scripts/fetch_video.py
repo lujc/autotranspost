@@ -240,6 +240,8 @@ def ytdlp_common_args(
     browser_cookies: str | None,
     allow_remote_ejs: bool,
     executable: str = "yt-dlp",
+    proxy: str | None = None,
+    js_runtime: str | None = None,
 ) -> list[str]:
     """Build deterministic yt-dlp arguments without exporting browser cookies."""
 
@@ -257,9 +259,17 @@ def ytdlp_common_args(
     ]
     if allow_remote_ejs:
         args.extend(["--remote-components", "ejs:npm"])
+    if js_runtime:
+        args.extend(["--js-runtimes", f"node:{js_runtime}"])
     if browser_cookies:
         # Pass the user's browser/profile expression byte-for-byte. Never export it.
         args.extend(["--cookies-from-browser", browser_cookies])
+    else:
+        # Anonymous mode: the `android` player client is the most reliable way to
+        # fetch without a login (YouTube bot-checks the default `web` client).
+        args.extend(["--extractor-args", "youtube:player_client=android"])
+    if proxy:
+        args.extend(["--proxy", proxy])
     return args
 
 
@@ -313,8 +323,10 @@ def probe_video(
     browser_cookies: str | None,
     allow_remote_ejs: bool,
     executable: str,
+    proxy: str | None = None,
+    js_runtime: str | None = None,
 ) -> dict[str, Any]:
-    command = ytdlp_common_args(browser_cookies, allow_remote_ejs, executable)
+    command = ytdlp_common_args(browser_cookies, allow_remote_ejs, executable, proxy, js_runtime)
     command.extend(["--dump-single-json", "--skip-download", url])
     result = _run(command, "probing the video", secrets=(url, browser_cookies or ""))
     info = _parse_single_json(result.stdout, "yt-dlp probe")
@@ -614,8 +626,10 @@ def _download_video_and_cover(
     browser_cookies: str | None,
     allow_remote_ejs: bool,
     executable: str,
+    proxy: str | None = None,
+    js_runtime: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    command = ytdlp_common_args(browser_cookies, allow_remote_ejs, executable)
+    command = ytdlp_common_args(browser_cookies, allow_remote_ejs, executable, proxy, js_runtime)
     video_template, cover_template = download_output_templates(base, cover_name)
     command.extend(
         [
@@ -659,8 +673,10 @@ def _download_original_subtitle(
     browser_cookies: str | None,
     allow_remote_ejs: bool,
     executable: str,
+    proxy: str | None = None,
+    js_runtime: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    command = ytdlp_common_args(browser_cookies, allow_remote_ejs, executable)
+    command = ytdlp_common_args(browser_cookies, allow_remote_ejs, executable, proxy, js_runtime)
     write_flag = "--write-subs" if choice.kind == "manual" else "--write-auto-subs"
     language_label = _subtitle_language_label(choice.language)
     command.extend(
@@ -1278,7 +1294,7 @@ def execute(args: argparse.Namespace) -> Path | None:
     print(f"Probing one video: {display_url(url)}", file=sys.stderr)
     try:
         info = probe_video(
-            url, effective_browser_cookies, args.allow_remote_ejs, yt_dlp
+            url, effective_browser_cookies, args.allow_remote_ejs, yt_dlp, args.proxy, args.js_runtime
         )
     except FetchError as exc:
         if not auto_cookie_fallback or not _looks_like_authentication_failure(exc):
@@ -1290,7 +1306,7 @@ def execute(args: argparse.Namespace) -> Path | None:
             file=sys.stderr,
         )
         info = probe_video(
-            url, effective_browser_cookies, args.allow_remote_ejs, yt_dlp
+            url, effective_browser_cookies, args.allow_remote_ejs, yt_dlp, args.proxy, args.js_runtime
         )
     deliverable = getattr(args, "deliver", "full")
     subtitles_only = deliverable in SUBTITLE_ONLY_DELIVERABLES
@@ -1353,6 +1369,8 @@ def execute(args: argparse.Namespace) -> Path | None:
                 browser_cookies=effective_browser_cookies,
                 allow_remote_ejs=args.allow_remote_ejs,
                 executable=yt_dlp,
+                proxy=args.proxy,
+                js_runtime=args.js_runtime,
             )
         )
 
@@ -1379,6 +1397,8 @@ def execute(args: argparse.Namespace) -> Path | None:
                 browser_cookies=effective_browser_cookies,
                 allow_remote_ejs=args.allow_remote_ejs,
                 executable=yt_dlp,
+                proxy=args.proxy,
+                js_runtime=args.js_runtime,
             )
         )
         original_subtitle = _artifact(output_dir, original_prefix)
@@ -2028,6 +2048,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-remote-ejs",
         action="store_true",
         help="Allow yt-dlp to fetch the EJS component from npm via Deno when required",
+    )
+    parser.add_argument(
+        "--proxy",
+        metavar="URL",
+        help=(
+            "Route yt-dlp traffic through this proxy, e.g. 'http://127.0.0.1:7890'. "
+            "Anonymous fetches default to the 'android' YouTube client, which (with a "
+            "proxy) usually bypasses the 'Sign in to confirm you are not a bot' wall."
+        ),
+    )
+    parser.add_argument(
+        "--js-runtime",
+        metavar="PATH",
+        help=(
+            "Path to a Node.js binary for yt-dlp signature decryption, e.g. "
+            "'C:/node/node.exe'. Used as '--js-runtimes node:<PATH>'. Avoids needing Deno."
+        ),
     )
     parser.add_argument(
         "--mp4-fallback",
