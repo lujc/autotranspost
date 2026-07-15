@@ -1,11 +1,11 @@
 ---
 name: autopublish
-description: AutoPublish downloads maximum-quality videos, covers, and source subtitles from YouTube, Bilibili, and other yt-dlp platforms; translates foreign subtitles with the active session model; creates bilingual captions; burns them into MP4; and can OPT-IN publish the finished bilingual video to Bilibili. Use for video download, video-only or subtitle-only delivery, Chrome-authenticated download, bilingual subtitles, hard-burned caption delivery, or Bilibili auto-publish.
+description: AutoPublish(自动发布)可从 YouTube、B 站及其他 yt-dlp 支持的平台下载最高画质的视频、封面与原始字幕;调用当前会话模型翻译外语字幕;生成双语字幕;将字幕硬烧录进 MP4;并可**选择启用**将成品双语视频发布到 B 站。适用于视频下载、仅视频/仅字幕交付、Chrome 鉴权下载、双语字幕生成、硬烧录字幕交付,以及 B 站自动发布。
 ---
 
-# AutoPublish
+# AutoPublish(自动发布)
 
-Process one authorized video per job directory and finish the whole applicable pipeline.
+每个任务目录处理一个已授权的视频,并跑完适用的完整流水线。
 
 ## Invariants
 
