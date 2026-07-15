@@ -46,6 +46,12 @@ import requests
 from bilibili_api import video, utils
 from bilibili_api.utils import Verify
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    _HAS_PIL = True
+except Exception:  # pragma: no cover
+    _HAS_PIL = False
+
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = SKILL_ROOT / "cache"
 CRED_PATH = CACHE_DIR / "bilibili_credential.json"
@@ -281,39 +287,128 @@ def _manifest_source(job: Path) -> tuple[str, str]:
     return str(src.get("title", "")), str(src.get("url", ""))
 
 
-def _load_meta(meta_path: Path, video_path: Path, job: Path) -> dict:
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in (text or ""))
+
+
+def _wrap_cjk(text: str, max_chars: int) -> list[str]:
+    """Greedy line-wrap a CJK title by character count."""
+    lines, cur = [], ""
+    for ch in text:
+        cur += ch
+        if len(cur) >= max_chars:
+            lines.append(cur)
+            cur = ""
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _make_cn_cover(
+    base: Path, out: Path, cn_title: str, prefix: str = "转载翻译"
+) -> Path | None:
+    """Render a Bilibili cover (1146x717) from `base` with a bold Chinese
+    title + 'prefix' badge overlay. Returns the output path, or None if PIL
+    is unavailable / base missing."""
+    if not _HAS_PIL or not base or not base.exists():
+        return None
+    try:
+        img = Image.open(base).convert("RGB")
+    except Exception:
+        return None
+    W, H = 1146, 717
+    img = img.resize((W, H))
+    draw = ImageDraw.Draw(img, "RGBA")
+    # dark gradient scrim bottom->top for legibility
+    for y in range(H):
+        a = int(150 * (y / H) ** 1.6)
+        draw.line([(0, y), (W, y)], fill=(0, 0, 0, a))
+    # top light scrim so the badge is readable
+    for y in range(0, 120):
+        draw.line([(0, y), (W, y)], fill=(0, 0, 0, int(90 * (1 - y / 120))))
+    font_dir = "C:/Windows/Fonts"
+    title_font = (
+        ImageFont.truetype(f"{font_dir}/simhei.ttf", 78)
+        if Path(f"{font_dir}/simhei.ttf").exists()
+        else ImageFont.load_default()
+    )
+    badge_font = (
+        ImageFont.truetype(f"{font_dir}/msyh.ttc", 40)
+        if Path(f"{font_dir}/msyh.ttc").exists()
+        else ImageFont.load_default()
+    )
+    # badge "转载翻译"
+    bw, bh = draw.textbbox((0, 0), prefix, font=badge_font)[2:4]
+    pad = 18
+    bx, by = 60, 60
+    draw.rounded_rectangle(
+        [bx, by, bx + bw + pad * 2, by + bh + pad * 2],
+        radius=14,
+        fill=(214, 48, 57, 235),
+    )
+    draw.text((bx + pad, by + pad), prefix, font=badge_font, fill=(255, 255, 255, 255))
+    # title (wrapped, max 11 chars/line, up to 3 lines)
+    lines = _wrap_cjk(cn_title, 11)[:3]
+    lh = 92
+    ty = H - 70 - lh * len(lines)
+    for i, line in enumerate(lines):
+        draw.text(
+            (60, ty + i * lh),
+            line,
+            font=title_font,
+            fill=(255, 255, 255, 255),
+            stroke_width=3,
+            stroke_fill=(0, 0, 0, 220),
+        )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(str(out))
+    return out
+
+
+def _load_meta(meta_path: Path, video_path: Path, job: Path, cn_title: str = "") -> dict:
     if meta_path.exists():
         try:
-            return json.loads(meta_path.read_text(encoding="utf-8"))
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception as e:
             sys.stderr.write(f"读取 meta 失败：{e}\n")
             sys.exit(1)
-    # Build a default meta next to the video, for the user to edit.
-    # Pull title + source URL from the job manifest when present so a
-    # copyright=2 (转载) submission has the required source link.
-    m_title, m_source = _manifest_source(job)
-    default = {
-        "title": m_title or video_path.stem,
-        "desc": "",
-        "dynamic": "",
-        "tag": "双语字幕,翻译",
-        "tid": 201,
-        "copyright": 2,
-        "source": m_source,
-        "no_reprint": 0,
-        "cover": "",
-        "subtitles": {"lan": "", "open": 0},
-        "part_title": m_title or video_path.stem,
-        "part_desc": "",
-    }
-    meta_path.write_text(
-        json.dumps(default, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    print(
-        f"已生成默认 publish-meta.json：{meta_path}\n"
-        f"  请按需修改（尤其 copyright=2 时必须填 source 原视频来源链接）。"
-    )
-    return default
+    else:
+        # Build a default meta next to the video, for the user to edit.
+        # Pull title + source URL from the job manifest when present so a
+        # copyright=2 (转载) submission has the required source link.
+        m_title, m_source = _manifest_source(job)
+        meta = {
+            "title": m_title or video_path.stem,
+            "desc": "",
+            "dynamic": "",
+            "tag": "双语字幕,翻译",
+            "tid": 201,
+            "copyright": 2,
+            "source": m_source,
+            "no_reprint": 0,
+            "cover": "",
+            "subtitles": {"lan": "", "open": 0},
+            "part_title": m_title or video_path.stem,
+            "part_desc": "",
+        }
+        meta_path.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(
+            f"已生成默认 publish-meta.json：{meta_path}\n"
+            f"  请按需修改（尤其 copyright=2 时必须填 source 原视频来源链接）。"
+        )
+    # Apply an explicit Chinese title (overrides the manifest's English one).
+    if cn_title:
+        cn_title = cn_title.strip()
+        meta["title"] = cn_title
+        meta["part_title"] = cn_title
+        if meta_path.exists():
+            meta_path.write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"已用中文标题覆盖 meta.title / part_title：{cn_title}")
+    return meta
 
 
 def _validate_meta(meta: dict, meta_path: Path) -> None:
@@ -395,17 +490,23 @@ def _on_progress(state: dict, d: dict) -> None:
 
 
 def _upload_and_submit(
-    video_path: Path, cover_path: Path | None, meta: dict, verify: Verify
+    video_path: Path,
+    cover_path: Path | None,
+    meta: dict,
+    verify: Verify,
+    cn_cover_path: Path | None = None,
 ) -> None:
-    # 1) cover
+    # 1) cover — prefer the rendered Chinese-title cover when present.
+    effective_cover = cn_cover_path or cover_path
     cover_url = ""
-    if cover_path and cover_path.exists():
-        print("上传封面…")
+    if effective_cover and effective_cover.exists():
+        label = "上传中文封面" if cn_cover_path else "上传封面"
+        print(label + "…")
         try:
-            cover_url = video.video_cover_upload(str(cover_path), verify)
+            cover_url = video.video_cover_upload(str(effective_cover), verify)
             print(f"  封面 URL：{cover_url}")
         except Exception as e:
-            sys.stderr.write(f"  封面上传失败（将不设置封面）：{e}\n")
+            sys.stderr.write(f"  {label}失败（将不设置封面）：{e}\n")
     # 2) video (retry up to 3x)
     print("上传视频…")
     filename = None
@@ -449,11 +550,12 @@ def _upload_and_submit(
             resp = video.video_submit(data, verify)
             last = resp
             # Success: bilibili returns {"aid":..., "bvid":...} (no code field).
+            # The bvid value may already include the "BV" prefix — normalise.
             if isinstance(resp, dict) and resp.get("bvid"):
-                print(
-                    f"投稿成功：BV{resp.get('bvid')} "
-                    f"(aid={resp.get('aid', '?')})"
-                )
+                bv = resp["bvid"]
+                if not bv.startswith("BV"):
+                    bv = f"BV{bv}"
+                print(f"投稿成功：{bv} (aid={resp.get('aid', '?')})")
                 return
             sys.stderr.write(f"  投稿返回异常（第 {attempt} 次）：{resp}\n")
         except Exception as e:
@@ -463,10 +565,10 @@ def _upload_and_submit(
     # If the last response still carries a bvid, treat it as success (some
     # error shapes wrap a valid bvid, e.g. rate-limit on a retry).
     if isinstance(last, dict) and last.get("bvid"):
-        print(
-            f"投稿成功（重试末次）：BV{last.get('bvid')} "
-            f"(aid={last.get('aid', '?')})"
-        )
+        bv = last["bvid"]
+        if not bv.startswith("BV"):
+            bv = f"BV{bv}"
+        print(f"投稿成功（重试末次）：{bv} (aid={last.get('aid', '?')})")
         return
     sys.stderr.write(f"投稿最终失败，最后响应：{last}\n")
     sys.exit(1)
@@ -483,12 +585,27 @@ def cmd_publish(args) -> None:
         sys.exit(1)
     cover_path = Path(args.cover) if args.cover else (job / "封面.jpg")
     meta_path = Path(args.meta) if args.meta else (job / "publish-meta.json")
-    meta = _load_meta(meta_path, video_path, job)
+    meta = _load_meta(meta_path, video_path, job, cn_title=args.cn_title or "")
     _validate_meta(meta, meta_path)
+
+    # Render a Chinese-title cover when a CN title is supplied.
+    cn_cover = None
+    if args.cn_title and _HAS_PIL:
+        base = cover_path if (cover_path and cover_path.exists()) else None
+        if base:
+            cn_cover = job / "封面_中文.png"
+            made = _make_cn_cover(base, cn_cover, args.cn_title.strip())
+            if made:
+                print(f"已生成中文封面：{made}（将在上传时优先使用）")
+            else:
+                sys.stderr.write("中文封面生成失败，将回退使用原始封面。\n")
+                cn_cover = None
+        else:
+            sys.stderr.write("未找到原始封面，无法生成中文封面。\n")
 
     # Dry-run is a pure offline preview; it never requires a live login.
     if args.dry_run:
-        _dry_run(video_path, cover_path, meta)
+        _dry_run(video_path, cn_cover or cover_path, meta)
         return
 
     cred = load_credential()
@@ -500,7 +617,7 @@ def cmd_publish(args) -> None:
     if not ok:
         sys.stderr.write(f"登录态失效（{uname}），请重新 login。\n")
         sys.exit(1)
-    _upload_and_submit(video_path, cover_path, meta, verify)
+    _upload_and_submit(video_path, cover_path, meta, verify, cn_cover_path=cn_cover)
 
 
 # --------------------------------------------------------------------------
@@ -525,6 +642,10 @@ def main(argv) -> None:
     pp.add_argument("--video", help="override video file path")
     pp.add_argument("--cover", help="override cover image path")
     pp.add_argument("--meta", help="override publish-meta.json path")
+    pp.add_argument(
+        "--cn-title",
+        help="中文标题；提供后投稿标题与封面上会显示该中文（封面叠加'转载翻译'大字）",
+    )
     pp.add_argument("--dry-run", action="store_true", help="validate + preview, no upload")
 
     args = p.parse_args(argv)

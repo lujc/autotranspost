@@ -192,13 +192,26 @@ Workflow:
 # preview (validates meta + prints file hash/size + login state, NO upload — safe to run first):
 python3 <skill-dir>/scripts/publish_bilibili.py publish --job <job-dir> --dry-run
 
-# actually upload + submit:
-python3 <skill-dir>/scripts/publish_bilibili.py publish --job <job-dir>
-#   overrides: --video <path>  --cover <path>  --meta <path>
+# actually upload + submit (Chinese title + cover badge):
+python3 <skill-dir>/scripts/publish_bilibili.py publish --job <job-dir> \
+    --cn-title "中文标题（会覆盖 meta.title，并在封面上叠加'转载翻译'+中文大字）"
+#   overrides: --video <path>  --cover <path>  --meta <path>  --cn-title <text>
 ```
+
+**Presenting the QR code (agent must do this):** after running `login --generate`
+(or `login`), the agent MUST call the `present_files` tool on
+`<skill-dir>/cache/bilibili_qr.png` so the user gets a clickable thumbnail
+in the left panel — the QR is generated into that file, but the shell
+output alone is not a visible image.
 
 Behavior:
 - The script uploads the video (chunked UPOS via `bilibili_api.video.video_upload`, with a 5% progress callback), uploads the cover (`video.video_cover_upload`, defaults to the job's `封面.jpg`), then submits metadata (`video.video_submit`). Each stage retries up to 3× with backoff.
+- **Chinese title + cover badge:** pass `--cn-title "..."` to publish a translated
+title. It overrides `meta.title`/`part_title` and renders a new cover
+(`封面_中文.png`, 1146×717) from the existing `封面.jpg` with a red
+"转载翻译" badge at top-left and the Chinese title as bold outlined large
+text at the bottom. The rendered cover is uploaded in place of the original
+(requires Pillow + a CJK font; Windows ships `simhei.ttf`/`msyh.ttc`).
 - **Copyright compliance (Invariant #11):** translated/republished foreign videos default to `copyright: 2` (转载) and **require a `source` URL** — submitting without it is rejected by the API and by the script's own pre-check. Use `copyright: 1` (原创) ONLY when you own the rights.
 - Title is truncated to ≤80 chars and tags to ≤10 (comma-separated); both warn on truncation.
 - The actual upload/submit needs network egress to `member`/`api`/`passport`.bilbili.com and `upos-*.bilivideo.com`; if the sandbox blocks it, run the `publish`/`login` command with the sandbox disabled (the agent will ask for your consent).
