@@ -19,6 +19,7 @@ Process one authorized video per job directory and finish the whole applicable p
 8. Keep context small: never read the full subtitle manifest, all batches at once, or raw FFmpeg logs.
 9. The burned MP4 MUST be seekable (draggable). `burn_subtitles.py` enforces a periodic keyframe interval (`-g` ~2s, plus `-forced-idr` for NVENC) on every encode. Never remove this; NVENC otherwise emits a single IDR at frame 0 and the file cannot be scrubbed.
 10. The skill directory IS a git repository. Commit every functional change to `scripts/`, `SKILL.md`, `references/`, `agents/`, or `tests/` (see "Version management" below) so regressions can be traced and rolled back.
+11. Bilibili publishing is **opt-in only** — never upload automatically; only when the user explicitly asks. For translated/republished foreign videos default `copyright: 2` (转载) and require a `source` URL; use `copyright: 1` (原创) ONLY when the user confirms they hold the rights. The Bilibili credential cache (`cache/bilibili_credential.json`, holding only `SESSDATA`/`bili_jct`/`buvid3`) is git-ignored and must never be printed in clear text (extends Invariant #5).
 
 ## Run
 
@@ -152,3 +153,52 @@ Conventions:
 - Commit BEFORE and AFTER a functional change so the diff is reviewable.
 - Tag stable baselines (e.g. `v1.0`) so they can be restored with `git checkout v1.0`.
 - A repo-local git identity (`jzsub-skill <jzsub@local>`) is set automatically on the first commit; override with `git config user.name/user.email` if you prefer your own.
+
+## Publish to Bilibili (opt-in)
+
+After `verify_delivery.py` exits 0, the burned MP4 can be uploaded to Bilibili
+with `scripts/publish_bilibili.py`. **This is opt-in: never run it unless
+the user explicitly asks to publish.** Dependencies (install once into the
+managed venv): `pip install bilibili-api` and `qrcode[pillow]`.
+
+Auth — QR login (caches only `SESSDATA`/`bili_jct`/`buvid3`, git-ignored,
+never printed):
+
+```bash
+# 1) generate QR; the agent shows cache/bilibili_qr.png for you to scan
+python3 <skill-dir>/scripts/publish_bilibili.py login --generate
+# 2) after you scan with the B站 app, poll until success (caches credential)
+python3 <skill-dir>/scripts/publish_bilibili.py login --confirm
+#    (or just `login` for generate+poll in one blocking run)
+# check state any time:
+python3 <skill-dir>/scripts/publish_bilibili.py status
+```
+
+Metadata — a `publish-meta.json` lives in the job dir. The script
+auto-creates a default next to the video (you edit it); keys:
+
+```json
+{"title":"视频名","desc":"","dynamic":"","tag":"双语字幕,翻译",
+ "tid":201,"copyright":2,"source":"<原视频URL>","no_reprint":0,
+ "cover":"","subtitles":{"lan":"","open":0},
+ "part_title":"分P标题","part_desc":""}
+```
+
+Workflow:
+
+```bash
+# preview (validates meta + prints file hash/size + login state, NO upload — safe to run first):
+python3 <skill-dir>/scripts/publish_bilibili.py publish --job <job-dir> --dry-run
+
+# actually upload + submit:
+python3 <skill-dir>/scripts/publish_bilibili.py publish --job <job-dir>
+#   overrides: --video <path>  --cover <path>  --meta <path>
+```
+
+Behavior:
+- The script uploads the video (chunked UPOS via `bilibili_api.video.video_upload`, with a 5% progress callback), uploads the cover (`video.video_cover_upload`, defaults to the job's `封面.jpg`), then submits metadata (`video.video_submit`). Each stage retries up to 3× with backoff.
+- **Copyright compliance (Invariant #11):** translated/republished foreign videos default to `copyright: 2` (转载) and **require a `source` URL** — submitting without it is rejected by the API and by the script's own pre-check. Use `copyright: 1` (原创) ONLY when you own the rights.
+- Title is truncated to ≤80 chars and tags to ≤10 (comma-separated); both warn on truncation.
+- The actual upload/submit needs network egress to `member`/`api`/`passport`.bilbili.com and `upos-*.bilivideo.com`; if the sandbox blocks it, run the `publish`/`login` command with the sandbox disabled (the agent will ask for your consent).
+
+Do NOT publish automatically as part of the `full` deliver target — only when the user says "发到 B 站" / "发布".
