@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections import deque
 import hashlib
 import json
@@ -12,6 +13,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.request
+import zipfile
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Sequence
@@ -33,6 +37,12 @@ FFMPEG_FULL_CANDIDATES = (
     Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),
     Path("/usr/local/opt/ffmpeg-full/bin/ffmpeg"),
 )
+
+# Direct download for the MiSans typeface used by the subtitle styles. When the
+# required font family is "MiSans" and it is not already installed, burn_subtitles
+# downloads, extracts, and installs it automatically instead of failing outright.
+MISANS_FAMILY = "MiSans"
+MISANS_DOWNLOAD_URL = "https://hyperos.mi.com/font-download/MiSans.zip"
 
 
 class BurnError(RuntimeError):
@@ -599,6 +609,99 @@ def _font_installed(family: str) -> bool | None:
     return False if searched else None
 
 
+def _misans_install_dirs() -> list[Path]:
+    """Directories that the system / fontconfig scans for user fonts.
+
+    Always includes ``~/.fonts`` (scanned by fontconfig / libass on every
+    platform). On Windows we additionally drop into the per-user font store so
+    the typeface is available to native Windows apps without admin rights.
+    """
+    dirs: list[Path] = [Path("~/.fonts").expanduser()]
+    if sys.platform.startswith("win"):
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            dirs.append(Path(local) / "Microsoft" / "Windows" / "Fonts")
+    elif sys.platform == "darwin":
+        dirs.append(Path("~/Library/Fonts").expanduser())
+    else:
+        dirs.append(Path("~/.local/share/fonts").expanduser())
+    return [d for d in dirs if d and not d.is_reserved()]
+
+
+def _install_misans() -> bool:
+    """Download ``MiSans.zip``, extract the font files and install them.
+
+    Returns True when the font files were copied into at least one font
+    directory. Network and extraction failures are reported and return False so
+    the caller can fall back to the original error / substitution path.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="misans_"))
+    zip_path = tmp / "MiSans.zip"
+    extract_dir = tmp / "extracted"
+    try:
+        print(f"MiSans not found; downloading from {MISANS_DOWNLOAD_URL}", file=sys.stderr)
+        request = urllib.request.Request(
+            MISANS_DOWNLOAD_URL, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(request, timeout=90) as resp, open(zip_path, "wb") as fh:
+            shutil.copyfileobj(resp, fh)
+        if not zip_path.is_file() or zip_path.stat().st_size < 1024:
+            print("error: downloaded MiSans archive is empty or too small", file=sys.stderr)
+            return False
+
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path) as zf:
+            seen: set[str] = set()
+            for member in zf.namelist():
+                # Skip macOS AppleDouble resource-fork files ("._Name.ttf") and
+                # the __MACOSX metadata directory — they are not real fonts.
+                if "/__MACOSX/" in member or member.startswith("__MACOSX/"):
+                    continue
+                base = os.path.basename(member)
+                if not base or base.startswith("._"):
+                    continue
+                if not base.lower().endswith(tuple(_FONT_FILE_SUFFIXES)):
+                    continue
+                if base in seen:
+                    continue
+                seen.add(base)
+                with zf.open(member) as src, open(extract_dir / base, "wb") as out:
+                    shutil.copyfileobj(src, out)
+
+        font_files = [p for p in extract_dir.iterdir() if p.suffix.lower() in _FONT_FILE_SUFFIXES]
+        if not font_files:
+            print("error: no font files (.ttf/.otf/.ttc) found inside MiSans archive", file=sys.stderr)
+            return False
+
+        installed_any = False
+        for target_dir in _misans_install_dirs():
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for font in font_files:
+                try:
+                    shutil.copy2(font, target_dir / font.name)
+                    installed_any = True
+                except OSError as exc:
+                    print(f"warning: could not copy {font.name} to {target_dir}: {exc}", file=sys.stderr)
+        if not installed_any:
+            return False
+
+        # Refresh fontconfig so fc-list / libass pick up the new files immediately.
+        fc_cache = shutil.which("fc-cache")
+        if fc_cache:
+            subprocess.run(
+                [fc_cache, "-f"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        return True
+    except Exception as exc:  # noqa: BLE001 - report and fall back gracefully
+        print(f"error: failed to auto-install MiSans: {exc}", file=sys.stderr)
+        return False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _require_subtitle_font(report: dict[str, Any], *, allow_missing_font: bool) -> None:
     font = str(report.get("font") or "").strip()
     if not font:
@@ -613,9 +716,16 @@ def _require_subtitle_font(report: dict[str, Any], *, allow_missing_font: bool) 
             file=sys.stderr,
         )
         return
+    # Definitively missing. If it is MiSans, try to download + install it
+    # automatically before giving up.
+    if MISANS_FAMILY.casefold() in re.sub(r"[\s_-]+", "", font).casefold():
+        print(f"font {font!r} not found; attempting automatic MiSans install", file=sys.stderr)
+        if _install_misans() and _font_installed(font) is True:
+            print(f"MiSans installed successfully; continuing with {font!r}", file=sys.stderr)
+            return
     message = (
         f"font {font!r} required by the validated subtitles was not found; install it "
-        "(MiSans: https://hyperos.mi.com/font/zh/download/)"
+        f"(MiSans: {MISANS_DOWNLOAD_URL})"
     )
     if allow_missing_font:
         print(f"warning: {message}; continuing with libass substitution", file=sys.stderr)

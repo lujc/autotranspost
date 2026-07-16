@@ -133,7 +133,7 @@ python3 <skill-dir>/scripts/burn_subtitles.py \
   --publish --cn-title "<中文标题>"
 ```
 
-**`--publish` 是必传参数。** 它会在烧录校验通过后自动上传成品 MP4 + 中文封面(黄字黑描边标题 +「转载翻译」红角标)到 B 站。若没有缓存登录态,脚本会展示二维码等待用户扫码后上传(登录态会被缓存,下次免扫码)。绝不要臆造 ASS 文件名——校验报告锁定它。烧录脚本会:挑选 libass FFmpeg、输出码率封顶≤源码率、强制可定位关键帧间隔、校验校验报告;字体未安装时失败退出(`--allow-missing-font` 可接受替换)。只打印 5% 进度里程碑,每 30–60 秒轮询一次。
+**`--publish` 是必传参数。** 它会在烧录校验通过后自动上传成品 MP4 + 中文封面(黄字黑描边标题 +「转载翻译」红角标)到 B 站。若没有缓存登录态,脚本会展示二维码等待用户扫码后上传(登录态会被缓存,下次免扫码)。绝不要臆造 ASS 文件名——校验报告锁定它。烧录脚本会:挑选 libass FFmpeg、输出码率封顶≤源码率、强制可定位关键帧间隔、校验校验报告;**若所需字体是 MiSans 且本机未安装,会自动从 `https://hyperos.mi.com/font-download/MiSans.zip` 下载、解压并安装到用户字体目录(含 `~/.fonts` 供 fontconfig/libass 扫描),再刷新字体缓存后继续**;仅当自动安装失败时才会失败退出(`--allow-missing-font` 可接受替换)。只打印 5% 进度里程碑,每 30–60 秒轮询一次。
 
 ### 步骤④ 校验(必跑)
 
@@ -145,7 +145,7 @@ python3 <skill-dir>/scripts/verify_delivery.py "<job-dir>/download-manifest.json
 
 ## 前置与故障
 
-- 需要 Python 3.10+、yt-dlp、ffmpeg/ffprobe 与 MiSans。`burn_subtitles.py` 会在不倾倒完整滤镜列表的情况下检查 libass 与 MiSans 字体,在 macOS 上优先使用 Homebrew 的 `ffmpeg-full`。
+- 需要 Python 3.10+、yt-dlp、ffmpeg/ffprobe 与 MiSans。`burn_subtitles.py` 会在不倾倒完整滤镜列表的情况下检查 libass 与 MiSans 字体,在 macOS 上优先使用 Homebrew 的 `ffmpeg-full`。**若 MiSans 未安装,烧录脚本会自动从 `https://hyperos.mi.com/font-download/MiSans.zip` 下载并安装(无需手动操作);仅在下载/解压失败时才会提示手动安装。**
 - YouTube 需要一个受支持的 JavaScript 运行时;优先用 Deno 2.3+。仅在遇到下载器、格式、字幕、JS 运行时或 PO-token 错误时,才去读 [platform-notes.md](references/platform-notes.md)。
 - 仅在鉴权失败时才去读 [chrome-auth.md](references/chrome-auth.md)。
 - 若源语言选择有歧义,用 `--source-lang` 询问;绝不要假设某条翻译轨就是原文。
@@ -191,7 +191,7 @@ git log --oneline
 
 **发布已在步骤③的 `--publish` 中自动完成**(烧录校验通过后即上传 MP4 + 中文封面);本「校验」步骤只负责 `verify_delivery.py` 校验,**不要在此再单独调用 `publish_bilibili.py`**(否则会重复上传)。仅当你需要补发/重发已烧好的成品时,才手动运行 `publish` 命令。依赖(装一次进受管 venv):`pip install bilibili-api` 与 `qrcode[pillow]`。
 
-当前版本:**v1.6**(HEAD 待提交;含 v1.5 的「H.264 优先下载 / master 永远无损封装 / 烧录默认 H.264 且码率≤下载 / 强制流水线」+ 本次「下载音频优先 AAC / master 音频只流复制 / 烧录音频强制转 AAC」)。
+当前版本:**v1.7**(HEAD 待提交;含 v1.6 的「下载音频优先 AAC / master 音频只流复制 / 烧录音频强制转 AAC」+ 本次「MiSans 未安装时自动从 `https://hyperos.mi.com/font-download/MiSans.zip` 下载解压安装」)。
 
 鉴权——二维码登录(仅缓存 `SESSDATA`/`bili_jct`/`buvid3`,被 git 忽略,绝不打印):
 
