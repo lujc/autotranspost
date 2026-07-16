@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""publish_bilibili.py — upload + submit a finished bilingual MP4 to Bilibili.
+"""publish_bilibili.py — upload + submit a finished (subtitled) MP4 to Bilibili.
 
 This is an OPT-IN feature of the autopublish skill. It is NEVER called automatically;
 the user must explicitly ask to publish.
@@ -267,7 +267,7 @@ def cmd_status(_args) -> None:
 # Publish (upload + submit)
 # --------------------------------------------------------------------------
 def _auto_video(job: Path) -> Path | None:
-    for pat in ("双语字幕版*.mp4", "*.mp4", "*.mkv"):
+    for pat in ("字幕版*.mp4", "双语字幕版*.mp4", "*.mp4", "*.mkv"):
         hits = sorted(job.glob(pat), key=lambda p: p.stat().st_mtime, reverse=True)
         if hits:
             return hits[0]
@@ -352,14 +352,14 @@ def _make_cn_cover(
     lh = 92
     ty = H - 70 - lh * len(lines)
     for i, line in enumerate(lines):
-        draw.text(
-            (60, ty + i * lh),
-            line,
-            font=title_font,
-            fill=(255, 255, 255, 255),
-            stroke_width=3,
-            stroke_fill=(0, 0, 0, 220),
-        )
+            draw.text(
+                (60, ty + i * lh),
+                line,
+                font=title_font,
+                fill=(255, 255, 0, 255),
+                stroke_width=3,
+                stroke_fill=(0, 0, 0, 220),
+            )
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(str(out))
     return out
@@ -381,7 +381,7 @@ def _load_meta(meta_path: Path, video_path: Path, job: Path, cn_title: str = "")
             "title": m_title or video_path.stem,
             "desc": "",
             "dynamic": "",
-            "tag": "双语字幕,翻译",
+            "tag": "翻译,字幕",
             "tid": 201,
             "copyright": 2,
             "source": m_source,
@@ -626,7 +626,7 @@ def cmd_publish(args) -> None:
 def main(argv) -> None:
     p = argparse.ArgumentParser(
         prog="publish_bilibili.py",
-        description="Upload + submit a finished bilingual MP4 to Bilibili (opt-in).",
+        description="Upload + submit a finished subtitled MP4 to Bilibili.",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 

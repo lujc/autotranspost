@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Burn one ASS subtitle track into a high-quality H.264 or AV1 MP4."""
+"""Burn one ASS subtitle track into a high-quality H.264 / H.265(HEVC) / AV1 MP4."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-DEFAULT_ENCODER = "libx264"
+DEFAULT_ENCODER = "hevc_nvenc"
 PROGRESS_BAR_WIDTH = 20
 PROGRESS_STEP_PERCENT = 5
 MP4_COPY_AUDIO_CODECS = frozenset({"aac", "ac3", "alac", "eac3", "mp3", "opus"})
@@ -53,8 +53,8 @@ def _positive_crf(value: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Burn an ASS subtitle file exactly once into an H.264/yuv420p or "
-            "AV1/yuv420p MP4 while preserving the source dimensions and frame timing."
+            "Burn an ASS subtitle file exactly once into an H.264 / H.265(HEVC) / "
+            "AV1 MP4 while preserving the source dimensions and frame timing."
         )
     )
     parser.add_argument("video", type=Path, help="input video")
@@ -90,6 +90,19 @@ def _parser() -> argparse.ArgumentParser:
         "--allow-missing-font",
         action="store_true",
         help="continue with libass font substitution when the validated font is not installed",
+    )
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help=(
+            "After a successful burn, automatically upload the MP4 to Bilibili "
+            "(login via QR if no cached credential). Overrides the opt-in default."
+        ),
+    )
+    parser.add_argument(
+        "--cn-title",
+        default="",
+        help="Chinese title for the Bilibili upload (used with --publish).",
     )
     return parser
 
@@ -139,6 +152,111 @@ def _require_libass_subtitles_filter(ffmpeg: str) -> None:
             "FFmpeg has no usable 'subtitles' filter; install an FFmpeg build "
             "with libass support"
         )
+
+
+def _resolve_encoder(ffmpeg: str, requested: str) -> str:
+    """Return an encoder FFmpeg actually supports, with graceful fallback.
+
+    NVENC hardware encoders (hevc_nvenc / h264_nvenc) are preferred for speed and
+    small files; if unavailable we fall back to libx265 / libx264 so the burn
+    still succeeds on machines without an NVIDIA GPU.
+    """
+
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        listing = result.stdout
+    except OSError:
+        return requested
+
+    def have(name: str) -> bool:
+        return name in listing
+
+    if have(requested):
+        return requested
+    if "nvenc" in requested:
+        if "hevc" in requested and have("libx265"):
+            return "libx265"
+        if "h264" in requested and have("libx264"):
+            return "libx264"
+    if have("libx265"):
+        return "libx265"
+    if have("libx264"):
+        return "libx264"
+    return requested
+
+
+def _auto_publish(output_path: Path, cn_title: str) -> None:
+    """Upload + submit the burned MP4 to Bilibili after a successful burn.
+
+    Requires a cached Bilibili login; if none, runs the QR login flow (which
+    writes ``cache/bilibili_qr.png`` for the agent to show the user) and polls
+    until the user scans. Network egress to Bilibili must be allowed — run with
+    the sandbox disabled if the sandbox blocks it. Any publish failure is
+    reported but never undoes the local burn.
+    """
+
+    publish_script = Path(__file__).resolve().with_name("publish_bilibili.py")
+    if not publish_script.is_file():
+        print("warning: publish_bilibili.py not found; skipping auto-upload", file=sys.stderr)
+        return
+    job = output_path.parent
+    py = sys.executable
+    try:
+        status = subprocess.run(
+            [py, str(publish_script), "status"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        need_login = (
+            status.returncode != 0
+            or "未登录" in status.stdout
+            or "失效" in status.stdout
+        )
+        if need_login:
+            qr_path = Path(__file__).resolve().parent.parent / "cache" / "bilibili_qr.png"
+            print(
+                f"未登录 B 站，启动二维码登录：请用 B 站 App 扫描 {qr_path}",
+                file=sys.stderr,
+            )
+            login = subprocess.run(
+                [py, str(publish_script), "login"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if login.stdout:
+                print(login.stdout, file=sys.stderr)
+            if login.stderr:
+                print(login.stderr, file=sys.stderr)
+            if login.returncode != 0:
+                print("error: B 站登录失败，未上传。请手动登录后重试。", file=sys.stderr)
+                return
+        cmd = [py, str(publish_script), "publish", "--job", str(job), "--video", str(output_path)]
+        if cn_title:
+            cmd += ["--cn-title", cn_title]
+        res = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+        )
+        if res.stdout:
+            print(res.stdout, file=sys.stderr)
+        if res.stderr:
+            print(res.stderr, file=sys.stderr)
+        if res.returncode != 0:
+            print(
+                "error: B 站上传/投稿失败（视频已生成在本地）。请检查网络或手动重试。",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # never let publish failure undo a good burn
+        print(f"warning: auto-publish skipped due to error: {exc}", file=sys.stderr)
 
 
 def _last_error_line(stderr: str) -> str:
@@ -413,15 +531,17 @@ def _validate_validation_report(subtitle: Path, report_path: Path) -> dict[str, 
         )
 
     outputs = report.get("outputs")
-    recorded_hash = outputs.get("bilingual.ass") if isinstance(outputs, dict) else None
+    if not isinstance(outputs, dict):
+        raise BurnError("validation report must include an 'outputs' checksum map")
+    recorded_hash = outputs.get(subtitle.name)
     if not isinstance(recorded_hash, str) or not re.fullmatch(
         r"[0-9a-fA-F]{64}", recorded_hash
     ):
         raise BurnError(
-            "validation report outputs['bilingual.ass'] must be a SHA-256 checksum"
+            f"validation report outputs[{subtitle.name!r}] must be a SHA-256 checksum"
         )
     if _sha256_file(subtitle) != recorded_hash.lower():
-        raise BurnError("bilingual.ass SHA-256 does not match the validation report")
+        raise BurnError(f"{subtitle.name} SHA-256 does not match the validation report")
     return report
 
 
@@ -716,6 +836,8 @@ def burn_subtitles(
     encoder: str = DEFAULT_ENCODER,
     validation_report: Path | None = None,
     allow_missing_font: bool = False,
+    publish: bool = False,
+    cn_title: str = "",
 ) -> list[str]:
     video = video.expanduser().resolve()
     subtitle = subtitle.expanduser().resolve()
@@ -750,6 +872,7 @@ def burn_subtitles(
 
     ffmpeg, ffprobe = _required_executables()
     _require_libass_subtitles_filter(ffmpeg)
+    encoder = _resolve_encoder(ffmpeg, encoder)
 
     input_probe = _probe(ffprobe, video)
     input_video = _main_video_stream(input_probe)
@@ -844,6 +967,8 @@ def burn_subtitles(
         if output.is_file():
             output.unlink()
         raise
+    if publish:
+        _auto_publish(output, cn_title)
     return audio_modes
 
 
@@ -860,6 +985,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             encoder=args.encoder,
             validation_report=args.validation_report,
             allow_missing_font=args.allow_missing_font,
+            publish=args.publish,
+            cn_title=args.cn_title or "",
         )
     except (BurnError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

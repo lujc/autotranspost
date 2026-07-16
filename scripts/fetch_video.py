@@ -27,7 +27,12 @@ from pathlib import Path
 from typing import Any, NamedTuple, Sequence
 
 
-FORMAT_SELECTOR = "bv*+ba/b"
+# Default download format: best 1080p video + best audio. The master MP4 is then
+# transcoded to H.265 by default (see --master-codec) so the on-disk "download"
+# is 1080p HEVC unless the user overrides --format.
+DEFAULT_FORMAT = "bestvideo[height<=1080][fps>=60]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+FORMAT_SELECTOR = DEFAULT_FORMAT  # kept for back-compat references
+DEFAULT_MASTER_CODEC = "hevc"  # hevc | h264 | copy
 MANIFEST_NAME = "download-manifest.json"
 DELIVERABLES = ("full", "video", "subs", "bilingual-subs")
 SUBTITLE_ONLY_DELIVERABLES = frozenset({"subs", "bilingual-subs"})
@@ -123,7 +128,7 @@ def delivery_names(title: Any, target_language: str) -> dict[str, str]:
     language = _language_base(target_language)
     if language in {"zh", "zho", "chi", "cmn", "yue", "wuu"}:
         cover = "封面.jpg"
-        prefix = "双语字幕版"
+        prefix = "字幕版"
     elif language in {"ja", "jpn"}:
         cover = "カバー.jpg"
         prefix = "二言語字幕版"
@@ -265,9 +270,14 @@ def ytdlp_common_args(
         # Pass the user's browser/profile expression byte-for-byte. Never export it.
         args.extend(["--cookies-from-browser", browser_cookies])
     else:
-        # Anonymous mode: the `android` player client is the most reliable way to
-        # fetch without a login (YouTube bot-checks the default `web` client).
-        args.extend(["--extractor-args", "youtube:player_client=android"])
+        # Anonymous mode: let yt-dlp auto-select the YouTube player client.
+        # Do NOT force `player_client=android` — it locks the download to 360p
+        # (format 18) instead of 1080p (401+251 via android_vr), and the
+        # auto-selected android_vr client fetches fine without a login.
+        # NOTE: if a forced proxy egress IP is bot-flagged by YouTube you will
+        # still hit "Sign in to confirm you're not a bot"; prefer no proxy or a
+        # clean egress over changing the client.
+        pass
     if proxy:
         args.extend(["--proxy", proxy])
     return args
@@ -628,6 +638,7 @@ def _download_video_and_cover(
     executable: str,
     proxy: str | None = None,
     js_runtime: str | None = None,
+    format_selector: str = DEFAULT_FORMAT,
 ) -> subprocess.CompletedProcess[str]:
     command = ytdlp_common_args(browser_cookies, allow_remote_ejs, executable, proxy, js_runtime)
     video_template, cover_template = download_output_templates(base, cover_name)
@@ -636,7 +647,7 @@ def _download_video_and_cover(
             "-P",
             str(output_dir),
             "-f",
-            FORMAT_SELECTOR,
+            format_selector,
             "--merge-output-format",
             "mkv",
             "--remux-video",
@@ -967,9 +978,90 @@ def _create_fallback_mp4(
             "aac",
             "-b:a",
             "256k",
-            "-movflags",
-            "+faststart",
-        ],
+        "-movflags",
+        "+faststart",
+    ],
+    ffmpeg,
+    replace_existing=replace_existing,
+    )
+
+
+def _ffmpeg_lists_encoder(ffmpeg: str, name: str) -> bool:
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return name in result.stdout
+
+
+def _pick_master_encoder(ffmpeg: str, codec: str) -> str:
+    """Pick a concrete FFmpeg encoder for the requested master codec.
+
+    Prefer an NVENC hardware encoder when present (fast, low bitrate), then a
+    software fallback so the skill still works on machines without an NVIDIA GPU.
+    """
+
+    if codec == "hevc":
+        for candidate in ("hevc_nvenc", "libx265"):
+            if _ffmpeg_lists_encoder(ffmpeg, candidate):
+                return candidate
+        return "libx265"
+    if codec == "h264":
+        for candidate in ("h264_nvenc", "libx264"):
+            if _ffmpeg_lists_encoder(ffmpeg, candidate):
+                return candidate
+        return "libx264"
+    return "libx264"
+
+
+def _create_master_transcoded(
+    intermediate: Path,
+    output_path: Path,
+    ffmpeg: str,
+    *,
+    codec: str = DEFAULT_MASTER_CODEC,
+    replace_existing: bool = False,
+) -> tuple[Path | None, str | None]:
+    """Transcode the intermediate to a 1080p master in the requested codec.
+
+    YouTube rarely serves H.265 directly, so the requested *download* codec
+    (HEVC by default) is realized here rather than by yt-dlp. The intermediate
+    is always scaled to 1920x1080 so the on-disk master is 1080p regardless of
+    the source resolution, and audio is copied losslessly.
+    """
+
+    encoder = _pick_master_encoder(ffmpeg, codec)
+    is_nvenc = "nvenc" in encoder
+    if is_nvenc:
+        # NVENC constant-quality VBR; -cq 23 ≈ high quality at modest bitrate.
+        quality_args = ["-rc", "vbr", "-cq", "23", "-preset", "p4"]
+    elif encoder == "libx265":
+        quality_args = ["-crf", "23", "-preset", "medium", "-x265-params", "log-level=error"]
+    else:
+        quality_args = ["-crf", "20", "-preset", "medium"]
+    ffmpeg_args = [
+        "-c:v",
+        encoder,
+        *quality_args,
+        "-pix_fmt",
+        "yuv420p",
+        "-vf",
+        "scale=1920:1080",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+    ]
+    return _atomic_ffmpeg_output(
+        intermediate,
+        output_path,
+        ffmpeg_args,
         ffmpeg,
         replace_existing=replace_existing,
     )
@@ -997,6 +1089,7 @@ def _manifest_base(
     choice: SubtitleChoice | None,
     deliverable: str = "full",
     target_language: str = DEFAULT_TARGET_LANGUAGE,
+    format: str = FORMAT_SELECTOR,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -1027,7 +1120,7 @@ def _manifest_base(
         },
         "selection": {
             "playlist_allowed": False,
-            "format": FORMAT_SELECTOR,
+            "format": format,
             "intermediate_container": "mkv",
             "subtitle": choice._asdict() if choice else None,
             "subtitle_candidates": available_subtitle_summary(info, target_language),
@@ -1326,6 +1419,7 @@ def execute(args: argparse.Namespace) -> Path | None:
         choice=choice,
         deliverable=deliverable,
         target_language=target_language,
+        format=getattr(args, "format", FORMAT_SELECTOR),
     )
     manifest["execution"] = {"resume": bool(args.resume)}
     manifest["authentication"]["mode"] = authentication_mode
@@ -1371,6 +1465,7 @@ def execute(args: argparse.Namespace) -> Path | None:
                 executable=yt_dlp,
                 proxy=args.proxy,
                 js_runtime=args.js_runtime,
+                format_selector=getattr(args, "format", DEFAULT_FORMAT),
             )
         )
 
@@ -1441,18 +1536,41 @@ def execute(args: argparse.Namespace) -> Path | None:
         ):
             raise FetchError("The intermediate failed verification: no video stream was found")
         master_path = output_dir / f"{base}.master.mp4"
-        print("Trying lossless MP4 remux…", file=sys.stderr)
-        master, remux_error = _try_lossless_mp4(
-            intermediate,
-            master_path,
-            ffmpeg,
-            replace_existing=args.resume,
-        )
-        if remux_error:
-            manifest["warnings"].append(f"Lossless MP4 remux unavailable: {remux_error}")
+        master_codec = getattr(args, "master_codec", DEFAULT_MASTER_CODEC) or DEFAULT_MASTER_CODEC
+        if master_codec == "copy":
+            print("Trying lossless MP4 remux…", file=sys.stderr)
+            master, master_error = _try_lossless_mp4(
+                intermediate,
+                master_path,
+                ffmpeg,
+                replace_existing=args.resume,
+            )
+            if master_error:
+                manifest["warnings"].append(f"Lossless MP4 remux unavailable: {master_error}")
+        else:
+            print(f"Transcoding master to 1080p {master_codec.upper()}…", file=sys.stderr)
+            master, master_error = _create_master_transcoded(
+                intermediate,
+                master_path,
+                ffmpeg,
+                codec=master_codec,
+                replace_existing=args.resume,
+            )
+            if master_error:
+                manifest["warnings"].append(
+                    f"Master transcode to {master_codec} failed: {master_error}; "
+                    "falling back to lossless remux"
+                )
+                master, master_error = _try_lossless_mp4(
+                    intermediate, master_path, ffmpeg, replace_existing=args.resume
+                )
+                if master_error:
+                    manifest["warnings"].append(
+                        f"Lossless MP4 remux fallback also failed: {master_error}"
+                    )
 
         if master is None and args.mp4_fallback:
-            print("Lossless remux was unavailable; creating requested high-quality MP4 fallback…", file=sys.stderr)
+            print("No master produced; creating requested high-quality H.264 MP4 fallback…", file=sys.stderr)
             fallback, fallback_error = _create_fallback_mp4(
                 intermediate,
                 output_dir / f"{base}.fallback.mp4",
@@ -1461,6 +1579,7 @@ def execute(args: argparse.Namespace) -> Path | None:
             )
             if fallback_error:
                 raise FetchError(f"Requested MP4 fallback failed: {fallback_error}")
+            master = fallback
 
     original_subtitle_record = _file_record(
         original_subtitle, output_dir, checksum=True
@@ -1520,7 +1639,7 @@ def run_self_tests() -> bool:
             self.assertEqual(names["cover"], "封面.jpg")
             self.assertEqual(
                 names["bilingual_video"],
-                "双语字幕版「Parking _ Sensor」.mp4",
+                "字幕版「Parking _ Sensor」.mp4",
             )
 
         def test_delivery_names_use_japanese_for_japanese_target(self) -> None:
@@ -2064,6 +2183,24 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to a Node.js binary for yt-dlp signature decryption, e.g. "
             "'C:/node/node.exe'. Used as '--js-runtimes node:<PATH>'. Avoids needing Deno."
+        ),
+    )
+    parser.add_argument(
+        "--format",
+        default=DEFAULT_FORMAT,
+        help=(
+            "yt-dlp format selector for the downloaded video (default: "
+            f"{DEFAULT_FORMAT!r} = prefer 1080p60 when available, else best 1080p, else best <=1080p). "
+            "The master MP4 is then transcoded to H.265 by default; pass e.g. 'bv*+ba/b' for max quality."
+        ),
+    )
+    parser.add_argument(
+        "--master-codec",
+        choices=("hevc", "h264", "copy"),
+        default=DEFAULT_MASTER_CODEC,
+        help=(
+            "Codec for the on-disk master MP4 (default: hevc = H.265). 'copy' keeps "
+            "the source stream losslessly (no 1080p guarantee); 'h264' uses H.264."
         ),
     )
     parser.add_argument(
