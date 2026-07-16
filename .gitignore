@@ -27,7 +27,7 @@ env/
 
 # ===== Working outputs / downloaded media =====
 # Job artifacts (masters, subtitles, burned videos) live OUTSIDE the skill dir
-# (under the caller's workspace jzsub_jobs/). Keep the skill repo source-only.
+# (under the caller's workspace autotranspost_jobs/). Keep the skill repo source-only.
 *.mp4
 *.mkv
 *.m4a
