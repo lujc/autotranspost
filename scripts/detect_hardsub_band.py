@@ -6,8 +6,8 @@
 即硬字幕最可能所在的 band。输出 JSON，供 subtitle_pipeline 把翻译字幕放到「对侧」。
 
 这不是 OCR，不识别具体文字，只估计「画面长期在哪一竖向条带出现字幕样的高对比文本」。
-对绝大多数「底部字幕」的视频有效；检测失败或不可靠时返回 reliable=false，
-调用方应回退到画面上方（安全默认）。
+对绝大多数「底部字幕」的视频有效；检测失败或不可靠（无法判断原视频是否含
+硬烧录字幕）时返回 reliable=false，调用方应回退到画面下方（安全默认）。
 """
 from __future__ import annotations
 
@@ -105,10 +105,12 @@ def find_band(agg: np.ndarray) -> dict:
 
 def recommend(band: dict) -> dict:
     if not band.get("found"):
+        # 无法判断原视频是否含「硬烧录字幕」时，按用户约定统一将
+        # 翻译字幕放在画面底部（而非顶部）——避免遮挡可能位于顶部的标题卡。
         return {
-            "side": "none", "recommend_alignment": 8, "margin_v": 60,
+            "side": "none", "recommend_alignment": 2, "margin_v": 60,
             "reliable": False,
-            "note": "未检测到稳定字幕带，回退到画面上方（安全默认）。",
+            "note": "未检测到稳定字幕带，回退到画面下方（无法判断原硬字幕时的安全默认）。",
         }
     c = band["center"]
     if c > 0.6:
@@ -155,8 +157,8 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory() as td:
             frames = extract_frames(video, Path(td), args.interval, args.cap, args.ffmpeg)
             if not frames:
-                sys.stderr.write("未能抽出任何帧，回退到顶部放置。\n")
-                _write_fallback(out, "未能抽出任何帧，已回退顶部。")
+                sys.stderr.write("未能抽出任何帧，回退到底部放置。\n")
+                _write_fallback(out, "未能抽出任何帧，已回退底部。")
                 return 0
             profiles: list[np.ndarray] = []
             for f in frames:
@@ -172,8 +174,8 @@ def main(argv: list[str] | None = None) -> int:
             agg /= len(profiles)
             band = find_band(agg)
     except Exception as e:  # pragma: no cover
-        sys.stderr.write(f"硬字幕检测失败（{e}），回退到顶部放置。\n")
-        _write_fallback(out, f"检测异常（{e}），已回退顶部。")
+        sys.stderr.write(f"硬字幕检测失败（{e}），回退到底部放置。\n")
+        _write_fallback(out, f"检测异常（{e}），已回退底部。")
         return 0
 
     rec = recommend(band)

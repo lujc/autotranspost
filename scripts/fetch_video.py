@@ -34,16 +34,27 @@ from typing import Any, NamedTuple, Sequence
 # The master MP4 is a LOSSLESS remux (copy) by default (see --master-codec):
 # no re-encode ever, so the only video re-encode in the pipeline is at the burn
 # step; master audio is stream-copied and force-normalized to AAC only at burn.
-# NOTE: the pure-audio fallback `/bestaudio` MUST stay at the very END of the
+# The pure-audio fallback `/bestaudio` MUST stay at the very END of the
 # chain. A mid-chain `/bestaudio` (as the original had after every video tier)
 # short-circuits yt-dlp: when the first video tier is unavailable it stops at the
 # immediately-following `bestaudio` and never reaches the later video tiers, so
 # you get an audio-only download even though a valid H.264+AAC combo exists.
+#
+# Guarantee: as long as ANY video stream exists we always pick a video+audio
+# combo (preferring H.264, then any codec at <=1080p, then ANY video at any
+# resolution) and only fall back to pure audio when no video stream exists at all.
+# This means a video with no H.264 (only AV1/VP9) still downloads its video,
+# and we never "stop" or "download audio only".
 DEFAULT_FORMAT = (
+    # Prefer H.264 (best player compatibility): 60fps / 1080p / any-1080p
     "bestvideo[height<=1080][fps>=60][vcodec^=avc1]+bestaudio[acodec^=mp4a]"
     "/bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]"
     "/bestvideo[height<=1080]+bestaudio[acodec^=mp4a]"
+    # No H.264 at <=1080p? Fall back to ANY codec (AV1/VP9) at <=1080p, still with audio
     "/best[height<=1080][acodec^=mp4a]/best[height<=1080]"
+    # Safety net: ANY video stream at any resolution (never give up on video)
+    "/bestvideo+bestaudio"
+    # ABSOLUTE last resort only if no video stream exists at all
     "/bestaudio"
 )
 FORMAT_SELECTOR = DEFAULT_FORMAT  # kept for back-compat references
@@ -638,9 +649,14 @@ def available_subtitle_summary(
     ]
 
 
-def download_output_templates(base: str, cover_name: str) -> tuple[str, str]:
+def download_output_templates(base: str, cover_name: str, merge_mp4: bool = False) -> tuple[str, str]:
+    # When --merge-mp4 is set the video template IS the master path, so yt-dlp
+    # merges straight into master.mp4 and no intermediate.mkv is produced.
+    video_template = (
+        f"{base}.master.%(ext)s" if merge_mp4 else f"{base}.intermediate.%(ext)s"
+    )
     return (
-        f"{base}.intermediate.%(ext)s",
+        video_template,
         f"thumbnail:{Path(cover_name).stem}.%(ext)s",
     )
 
@@ -657,9 +673,10 @@ def _download_video_and_cover(
     proxy: str | None = None,
     js_runtime: str | None = None,
     format_selector: str = DEFAULT_FORMAT,
+    merge_mp4: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = ytdlp_common_args(browser_cookies, allow_remote_ejs, executable, proxy, js_runtime)
-    video_template, cover_template = download_output_templates(base, cover_name)
+    video_template, cover_template = download_output_templates(base, cover_name, merge_mp4)
     command.extend(
         [
             "-P",
@@ -667,9 +684,9 @@ def _download_video_and_cover(
             "-f",
             format_selector,
             "--merge-output-format",
-            "mkv",
+            "mp4" if merge_mp4 else "mkv",
             "--remux-video",
-            "mkv",
+            "mp4" if merge_mp4 else "mkv",
             "--write-thumbnail",
             "--convert-thumbnails",
             "jpg",
@@ -1484,6 +1501,7 @@ def execute(args: argparse.Namespace) -> Path | None:
                 proxy=args.proxy,
                 js_runtime=args.js_runtime,
                 format_selector=getattr(args, "format", DEFAULT_FORMAT),
+                merge_mp4=getattr(args, "merge_mp4", False),
             )
         )
 
@@ -1522,10 +1540,16 @@ def execute(args: argparse.Namespace) -> Path | None:
     master: Path | None = None
     fallback: Path | None = None
     fallback_error: str | None = None
+    master_path = output_dir / f"{base}.master.mp4"
     if not subtitles_only:
-        intermediate = _intermediate_path(output_dir, base, ffprobe)
-        if intermediate is None:
-            raise FetchError("yt-dlp completed but no intermediate video file was found")
+        if getattr(args, "merge_mp4", False):
+            # --merge-mp4: yt-dlp merged straight into master.mp4,
+            # so the "intermediate" IS the master and no .intermediate.mkv exists.
+            intermediate = master_path
+        else:
+            intermediate = _intermediate_path(output_dir, base, ffprobe)
+            if intermediate is None:
+                raise FetchError("yt-dlp completed but no intermediate video file was found")
         cover_path = output_dir / names["cover"]
         cover = cover_path if cover_path.is_file() else None
     if choice and original_subtitle is None:
@@ -1555,7 +1579,14 @@ def execute(args: argparse.Namespace) -> Path | None:
             raise FetchError("The intermediate failed verification: no video stream was found")
         master_path = output_dir / f"{base}.master.mp4"
         master_codec = getattr(args, "master_codec", DEFAULT_MASTER_CODEC) or DEFAULT_MASTER_CODEC
-        if master_codec == "copy":
+        if getattr(args, "merge_mp4", False) and intermediate == master_path:
+            # --merge-mp4 already produced master.mp4 directly; skip remux.
+            master = master_path
+            manifest["warnings"].append(
+                "Used --merge-mp4: skipped the intermediate MKV; "
+                "master.mp4 is the direct yt-dlp merge (still lossless copy)."
+            )
+        elif master_codec == "copy":
             print("Trying lossless MP4 remux…", file=sys.stderr)
             master, master_error = _try_lossless_mp4(
                 intermediate,
@@ -2234,6 +2265,16 @@ def build_parser() -> argparse.ArgumentParser:
         dest="mp4_fallback",
         action="store_true",
         help="If lossless MP4 remux fails, explicitly allow a CRF 18 H.264/AAC fallback",
+    )
+    parser.add_argument(
+        "--merge-mp4",
+        action="store_true",
+        help=(
+            "Skip the intermediate MKV: have yt-dlp merge video+audio straight "
+            "into master.mp4 (still a lossless copy, no re-encode). Use ONLY when the "
+            "source video+audio are MP4-compatible (e.g. H.264 + AAC); if the "
+            "audio is WebM/Opus, leave this OFF so the MKV intermediate can absorb it."
+        ),
     )
     parser.add_argument(
         "--resume",

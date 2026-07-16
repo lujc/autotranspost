@@ -27,7 +27,9 @@ description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt
 
 ```bash
 python3 <skill-dir>/scripts/fetch_video.py \
-  "<video-url>" --output-dir "<job-dir>" --browser-cookies auto
+  "<video-url>" --output-dir "<job-dir>" --browser-cookies auto \
+  --js-runtime "<node.exe>" --allow-remote-ejs \
+  --merge-mp4   # 可选：源为 H.264+AAC(本就是 MP4 兼容)时跳过 intermediate.mkv，直接合成 master.mp4
 ```
 
 翻译目标默认是简体中文;当用户指定其他语言时,传入 `--target-lang ja`、`fr` 等。源语言本就是目标语言的字幕轨会被自动跳过。
@@ -102,7 +104,7 @@ python3 <skill-dir>/scripts/detect_hardsub_band.py \
   --ffmpeg "<ffmpeg 可执行文件路径>"
 ```
 
-此步必须在渲染前执行。它基于画面文本密度带估算原视频内嵌硬字幕所在的竖向区域(y0/y1),输出 `hardsub_band.json`。后续渲染步骤会读取此 JSON 并将中文放到「对侧」(原字幕在底部→中文置顶;在顶部→置底)。检测失败时会优雅回退到顶部放置。
+此步必须在渲染前执行。它基于画面文本密度带估算原视频内嵌硬字幕所在的竖向区域(y0/y1),输出 `hardsub_band.json`。后续渲染步骤会读取此 JSON 并将中文放到「对侧」(原字幕在底部→中文置顶;在顶部→置底)。**当无法判断原视频是否含硬字幕时(检测失败/不可靠),统一将中文字幕回退到画面底部放置**(不遮挡可能位于顶部的标题卡);能判断时则按上述规则做避让。
 
 ### 步骤② 渲染字幕(必跑,必须传入 --hardsub 与 --font)
 
@@ -124,6 +126,8 @@ python3 <skill-dir>/scripts/subtitle_pipeline.py render \
 ### 步骤③ 烧录(必跑,必须传入 --publish)
 
 `fetch_video.py` 产出的 `master.mp4` 现在**永远是「无损封装(copy)」**——只复制视频/音频流、绝不二次编码,分辨率与下载源一致(音频也只做流复制)。`burn_subtitles.py` 才是整条流水线里**唯一一次视频重编码**,默认输出 **H.264**(h264_nvenc,回退 libx264),码率封顶 ≤ 下载视频码率;**音频则强制转码为 AAC**(有界码率,源是 opus/mp3 也会被归一化,以保证 MP4 / B 站最大的兼容性)。
+
+> 关于那个"中间版本":默认 `fetch_video.py` 会先产出 `*.intermediate.mkv`(这是把 YouTube **拆分下发的视频流 + 音频流**用 `--remux-video mkv` 合起来的**容器封装、不是重新编码**,YouTube 音频有时是 WebM/Opus,需先进 mkv 容器才能再无损 remux 成 mp4),再把 mkv 无损 remux 成 `master.mp4`。**当源视频+音频本就是 MP4 兼容(如 H.264 + AAC)时**,可在下载命令加 `--merge-mp4`,让 yt-dlp **直接合并成 master.mp4、跳过 intermediate.mkv**(仍是无损拷贝)。注意:若源音频是 WebM/Opus,**不要**开 `--merge-mp4`(opus 进不了 mp4 容器),此时必须保留 mkv 中间文件。
 
 ```bash
 python3 <skill-dir>/scripts/burn_subtitles.py \
