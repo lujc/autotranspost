@@ -91,24 +91,39 @@ python3 <skill-dir>/scripts/subtitle_pipeline.py next-batch \
 
 当目标是中文(默认)时,套用之家风格:把内部的 `，。` 停顿换成空格,并在 cue 结尾处省略;其他目标保留原生标点。始终保留人名、URL、代码、数字、语气与含义。不要合并、拆分、重排、注释或添加换行。
 
-队列完成后渲染:
+队列完成后,按以下**强制顺序**逐步执行。每一步都是必跑项,不得跳过或合并。
+
+### 步骤① 硬烧录字幕带检测(必跑)
+
+```bash
+python3 <skill-dir>/scripts/detect_hardsub_band.py \
+  "<job-dir>/<master>.master.mp4" \
+  --out "<job-dir>/hardsub_band.json" \
+  --ffmpeg "<ffmpeg 可执行文件路径>"
+```
+
+此步必须在渲染前执行。它基于画面文本密度带估算原视频内嵌硬字幕所在的竖向区域(y0/y1),输出 `hardsub_band.json`。后续渲染步骤会读取此 JSON 并将中文放到「对侧」(原字幕在底部→中文置顶;在顶部→置底)。检测失败时会优雅回退到顶部放置。
+
+### 步骤② 渲染字幕(必跑,必须传入 --hardsub 与 --font)
 
 ```bash
 python3 <skill-dir>/scripts/subtitle_pipeline.py render \
   --manifest "<job-dir>/subtitles/subtitle-manifest.json" \
   --translations-dir "<job-dir>/subtitles/translation-output" \
-  --output-dir "<job-dir>/subtitles/rendered"
+  --output-dir "<job-dir>/subtitles/rendered" \
+  --font MiSans \
+  --hardsub "<job-dir>/hardsub_band.json"
 ```
 
-可用 `--font` 覆盖默认字体(默认为 MiSans)。
+**`--font MiSans` 和 `--hardsub` 是必传参数,不得省略。**
 
-这一步会把翻译好的 cue 对重新编组为句对齐的定时显示片段,然后生成:源语言 SRT、目标语言 SRT(`zh-CN.srt`)、双语 SRT,以及一份双语 `bilingual.ass`(MiSans Bold)和一份**仅中文**的 `zh-CN.ass`(无源语言/英文行)。按交付约定,烧录步骤使用的是 `zh-CN.ass`,因此视频只携带中文译文;`source.srt` 保留原始文本。默认行序是源在上、译文在下;传入 `--swap-lines` 可反转。
+这一步生成:源语言 SRT、目标语言 SRT(`zh-CN.srt`)、双语 SRT,以及一份双语 `bilingual.ass` 和一份**仅中文** `zh-CN.ass`(**无源语言/英文行**)。烧录步骤使用的是 `zh-CN.ass`。
 
-**硬烧录字幕避让(新增):** 若原视频画面里内嵌了硬字幕,可先运行 `detect_hardsub_band.py` 估计其所在的竖向条带,再把结果 JSON 通过渲染的 `--hardsub` 传入。脚本会把中文放到「对侧」(检测到原字幕在底部则中文置顶,在顶部则置底;检测不到时默认置顶),从而不遮挡原字幕。该检测基于画面文本密度带,**不是** OCR,对绝大多数底部字幕的视频有效;检测失败时会优雅回退到顶部放置。可用 `--allow-missing-font` 接受字体替换。
+**字幕样式(固定):** 中文使用 MiSans Bold,**黄色填充(&H0000FFFF) + 黑色描边(Outline=3)**,字号 60(横屏)/52(竖屏)。
 
-字幕样式(新增):中文行使用 MiSans Bold,**黄色填充 + 黑色描边**,字号较此前明显加大。
+### 步骤③ 烧录(必跑,必须传入 --publish)
 
-仅从 1080p 主文件烧录一次(`full` 目标才有)。`fetch_video.py` 产出的主文件默认就是 1080p H.265,而烧录**保持源分辨率不变**,因此喂给它那个 1080p 主文件,得到的就是 1080p H.265 烧录版。使用渲染步骤产出的仅中文 ASS(无源语言行):
+仅从 1080p 主文件烧录一次。`fetch_video.py` 产出的主文件默认就是 1080p H.265,喂给烧录脚本即可得到 1080p H.265 烧录版:
 
 ```bash
 python3 <skill-dir>/scripts/burn_subtitles.py \
@@ -118,15 +133,15 @@ python3 <skill-dir>/scripts/burn_subtitles.py \
   --publish --cn-title "<中文标题>"
 ```
 
-`--publish` 会把成品 MP4 自动上传到 B 站(当没有缓存登录态时会走二维码登录流程)。不带 `--publish` 则只做本地烧录。绝不要臆造或翻译 ASS 文件名——校验报告会锁定它。烧录脚本会挑选支持 libass 的 FFmpeg,把输出视频码率封顶到 ≤ 源视频码率,强制可定位的关键帧间隔,并校验校验报告;当校验过的字体未安装时失败退出(`--allow-missing-font` 可接受替换)。它只打印 5% 进度的里程碑。把它作为单个运行中的进程来对待;每 30–60 秒最多轮询一次,且只读取新增输出。
+**`--publish` 是必传参数。** 它会在烧录校验通过后自动上传成品 MP4 + 中文封面(黄字黑描边标题 +「转载翻译」红角标)到 B 站。若没有缓存登录态,脚本会展示二维码等待用户扫码后上传(登录态会被缓存,下次免扫码)。绝不要臆造 ASS 文件名——校验报告锁定它。烧录脚本会:挑选 libass FFmpeg、输出码率封顶≤源码率、强制可定位关键帧间隔、校验校验报告;字体未安装时失败退出(`--allow-missing-font` 可接受替换)。只打印 5% 进度里程碑,每 30–60 秒轮询一次。
 
-最后运行:
+### 步骤④ 校验(必跑)
 
 ```bash
 python3 <skill-dir>/scripts/verify_delivery.py "<job-dir>/download-manifest.json"
 ```
 
-退出码 3 标识未完成的阶段,立即继续它。只有在退出码 0、且存在非空的 `字幕版「…」.mp4`(仅中文字幕)时才报告成功。
+退出码 3 标识未完成的阶段,立即继续它。只有在退出码 0、且存在非空的 `字幕版「…」.mp4` 时才报告成功。
 
 ## 前置与故障
 
@@ -176,7 +191,7 @@ git log --oneline
 
 `verify_delivery.py` 退出码 0 后,烧录好的 MP4 即可通过 `scripts/publish_bilibili.py` 上传到 B 站。**按不变式 #11,这是烧录后自动进行的**——只要烧录成功且带 `--publish`(或智能体继续发布),就会直接上传,无需用户再说「发到 B 站」。你也可以手动运行 `publish` 命令来重新上传或补发。依赖(装一次进受管 venv):`pip install bilibili-api` 与 `qrcode[pillow]`。
 
-当前版本:**v1.2**(HEAD 3488666;本次「四项修正」后建议打 tag **v1.3**:默认 1080p60 优先、仅中文黄字黑描边、硬字幕避让、烧录后自动发布)。
+当前版本:**v1.4**(HEAD aaa5a1f;含 v1.3 四项修正 + 重命名 autopublish→autotranspost + 本次「强制流水线」改造)。
 
 鉴权——二维码登录(仅缓存 `SESSDATA`/`bili_jct`/`buvid3`,被 git 忽略,绝不打印):
 
