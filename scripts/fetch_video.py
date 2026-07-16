@@ -28,13 +28,17 @@ from typing import Any, NamedTuple, Sequence
 
 
 # Default download format: prefer H.264 (avc1) at 1080p, 60fps when available,
-# falling back to any 1080p codec, then best <=1080p. The master MP4 is a
-# LOSSLESS remux (copy) by default (see --master-codec): no re-encode ever,
-# so the only video re-encode in the whole pipeline happens at the burn step.
+# Priorities, in order: 1080p H.264 (60fps if available) with AAC audio,
+# then any 1080p H.264, then any 1080p, then best <=1080p. Within each
+# tier AAC audio is preferred (acodec^=mp4a) with a fallback to any audio.
+# The master MP4 is a LOSSLESS remux (copy) by default (see --master-codec):
+# no re-encode ever, so the only video re-encode in the pipeline is at the burn
+# step; master audio is stream-copied and force-normalized to AAC only at burn.
 DEFAULT_FORMAT = (
-    "bestvideo[height<=1080][fps>=60][vcodec^=avc1]+bestaudio"
-    "/bestvideo[height<=1080][vcodec^=avc1]+bestaudio"
-    "/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+    "bestvideo[height<=1080][fps>=60][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestaudio"
+    "/bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestaudio"
+    "/bestvideo[height<=1080]+bestaudio[acodec^=mp4a]/bestaudio"
+    "/best[height<=1080][acodec^=mp4a]/best[height<=1080]"
 )
 FORMAT_SELECTOR = DEFAULT_FORMAT  # kept for back-compat references
 DEFAULT_MASTER_CODEC = "copy"  # copy | hevc | h264
@@ -2195,9 +2199,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_FORMAT,
         help=(
             "yt-dlp format selector for the downloaded video (default: "
-            f"{DEFAULT_FORMAT!r} = prefer 1080p H.264 (60fps if available), else any 1080p, else best <=1080p). "
-            "The master MP4 is a LOSSLESS remux (copy) by default (no re-encode); "
-            "override with --master-codec hevc/h264 only when you explicitly need a transcode."
+            f"{DEFAULT_FORMAT!r} = prefer 1080p H.264 (60fps if available) with AAC audio, "
+            "else any 1080p H.264, else any 1080p, else best <=1080p; AAC audio is preferred "
+            "within each tier. The master MP4 is a LOSSLESS remux (copy) by default (audio stream-copied, "
+            "no re-encode); override with --master-codec hevc/h264 only when you explicitly need a transcode."
         ),
     )
     parser.add_argument(

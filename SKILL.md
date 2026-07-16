@@ -1,6 +1,6 @@
 ---
 name: autotranspost
-description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt-dlp 支持的平台下载视频(默认优先 1080p H.264、有 60fps 优先)、封面与原始字幕;调用当前会话模型翻译外语字幕(字幕仅保留中文,不带英文源行);将中文硬字幕烧录进 1080p H.264 MP4(码率不超过下载视频,字幕为黄色+黑描边);并在烧录完成后自动发布到 B 站。适用于视频下载、仅视频/仅字幕交付、Chrome 鉴权下载、中文硬字幕生成、硬烧录交付,以及 B 站自动发布。
+description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt-dlp 支持的平台下载视频(默认优先 1080p H.264、有 60fps 优先、音频优先 AAC)、封面与原始字幕;调用当前会话模型翻译外语字幕(字幕仅保留中文,不带英文源行);将中文硬字幕烧录进 1080p H.264 MP4(码率不超过下载视频、音频强制转 AAC、字幕为黄色+黑描边);并在烧录完成后自动发布到 B 站。适用于视频下载、仅视频/仅字幕交付、Chrome 鉴权下载、中文硬字幕生成、硬烧录交付,以及 B 站自动发布。
 ---
 
 # AutoTransPost(自动翻译发布)
@@ -62,7 +62,7 @@ python3 <skill-dir>/scripts/fetch_video.py \
 - 个别视频被硬性标记,无论客户端/代理如何都无法在无 cookie 情况下抓取;
   这种情况回退到 `--browser-cookies chrome`(绝不导出 cookies.txt)。
 
-抓取器会选择最佳的视频 + 最佳音轨,**格式默认优先 1080p H.264(60fps 优先)、否则任意 1080p、否则 ≤1080p**(可用 `--format` 覆盖);主文件**默认做无损封装(copy,绝不二次编码、分辨率与下载源一致)**(可用 `--master-codec` copy|hevc|h264 覆盖——仅当你显式需要转码时才用 hevc/h264)。同时下载 JPEG 封面,优先选择原语言的手动字幕而非自动字幕,并写出 `download-manifest.json`。请原样使用它生成的交付文件名:默认中文目标会写出 `封面.jpg`,并返回一个形如 `字幕版「视频名」.mp4` 的 `burn_output`(仅中文字幕)。整条流水线里**唯一一次视频重编码发生在烧录步(burn)**,下载与 master 都不重编码。
+抓取器会选择最佳的视频 + 最佳音轨,**格式默认优先 1080p H.264(60fps 优先)、否则任意 1080p、否则 ≤1080p**,且**音频优先选择 AAC**(`[acodec^=mp4a]`,自动回退任意音频)(可用 `--format` 覆盖);主文件**默认做无损封装(copy,视频/音频都只做流复制、绝不二次编码、分辨率与下载源一致)**(可用 `--master-codec` copy|hevc|h264 覆盖——仅当你显式需要转码时才用 hevc/h264)。同时下载 JPEG 封面,优先选择原语言的手动字幕而非自动字幕,并写出 `download-manifest.json`。请原样使用它生成的交付文件名:默认中文目标会写出 `封面.jpg`,并返回一个形如 `字幕版「视频名」.mp4` 的 `burn_output`(仅中文字幕)。整条流水线里**唯一一次视频重编码发生在烧录步(burn)**,下载与 master 都不重编码;**master 的音频只做流复制(不重编码)**,烧录步才把音频强制转成 AAC。
 
 所有字幕轨都会按句边界自动切分:以标点结束(! . ? 。！？…)的完整句子作为一个显示单元保留。彼此间隔在 2 秒内的连续字幕会被合并为一条字幕,只要总时长不超过 10 秒且文本宽度不超过 100 字符。这避免了把一个句子拆到多帧字幕上。
 
@@ -123,7 +123,7 @@ python3 <skill-dir>/scripts/subtitle_pipeline.py render \
 
 ### 步骤③ 烧录(必跑,必须传入 --publish)
 
-`fetch_video.py` 产出的 `master.mp4` 现在**永远是「无损封装(copy)」**——只复制视频/音频流、绝不二次编码,分辨率与下载源一致。`burn_subtitles.py` 才是整条流水线里**唯一一次视频重编码**,默认输出 **H.264**(h264_nvenc,回退 libx264),码率封顶 ≤ 下载视频码率;
+`fetch_video.py` 产出的 `master.mp4` 现在**永远是「无损封装(copy)」**——只复制视频/音频流、绝不二次编码,分辨率与下载源一致(音频也只做流复制)。`burn_subtitles.py` 才是整条流水线里**唯一一次视频重编码**,默认输出 **H.264**(h264_nvenc,回退 libx264),码率封顶 ≤ 下载视频码率;**音频则强制转码为 AAC**(有界码率,源是 opus/mp3 也会被归一化,以保证 MP4 / B 站最大的兼容性)。
 
 ```bash
 python3 <skill-dir>/scripts/burn_subtitles.py \
@@ -151,7 +151,7 @@ python3 <skill-dir>/scripts/verify_delivery.py "<job-dir>/download-manifest.json
 - 若源语言选择有歧义,用 `--source-lang` 询问;绝不要假设某条翻译轨就是原文。
 - 若 MP4 封装修复失败,保留最佳源,只做最后的烧录重编码。
 - 提醒:兼容模式烧录不保证保留 HDR。
-- 烧录脚本支持用 `--encoder` 选择编码器:默认 `h264_nvenc`(H.264,自动回退 libx264),也可传 `--encoder hevc_nvenc` / `--encoder av1_nvenc` 得到 H.265/HEVC / AV1 输出。校验器接受 H.264(h264)、H.265/HEVC(hevc)与 AV1(av1)三种编码。对 NVIDIA NVENC 硬件加速(例如 RTX 50 系),可用 `--encoder av1_nvenc --crf 25 --preset 7` 或 `--encoder hevc_nvenc --crf 25 --preset 7`。当播放器无法定位/拖拽 AV1 文件时,**使用 HEVC(hevc_nvenc)**——某些播放器对 AV1 的拖拽支持很差;H.265 拥有普遍的硬件解码与稳如磐石的拖动。**可定位性修复(强制,每次编码自动执行):** NVENC 默认几乎是无限 GOP(仅第 0 帧一个 IDR),导致文件无法定位(「拖不动」)。脚本在每次编码时无视编码器强制固定关键帧间隔:`-g` + `-keyint_min` 约为视频 2 秒(由源 fps 推算;fps 未知时回退 `-g 120`),并对 NVENC 额外加 `-forced-idr 1`,使周期关键帧成为真正的 IDR 帧。烧录后用 `ffprobe -select_streams v:0 -show_entries frame=key_frame` 验证——健康的文件应有大量(成百上千)关键帧,而不是 1 个。绝不要剥离这些标志。**码率封顶(强制,自动):** 最终输出码率绝不可超过源。当源码率已知时,脚本把视频流封顶到约源*视频*码率的 95%,并无损拷贝音轨(opus/aac/mp3),因此视频+音频 ≤ 源总码率。这通过硬性的 VBR `-maxrate`/`-bufsize` 上限来强制。恒定质量模式(对 NVENC 用 `-cq`,对 SVT 用 `-crf`)在封顶期间**刻意避开**——它们会忽略 `-b:v` 并让输出膨胀(实测:`-rc vbr -cq 25` 在 857 kbps 的封顶下产出 5.4 Mbps)。当封顶生效时,`--crf` 被忽略,质量被码率限制到与源匹配。
+- 烧录脚本支持用 `--encoder` 选择编码器:默认 `h264_nvenc`(H.264,自动回退 libx264),也可传 `--encoder hevc_nvenc` / `--encoder av1_nvenc` 得到 H.265/HEVC / AV1 输出。校验器接受 H.264(h264)、H.265/HEVC(hevc)与 AV1(av1)三种编码。对 NVIDIA NVENC 硬件加速(例如 RTX 50 系),可用 `--encoder av1_nvenc --crf 25 --preset 7` 或 `--encoder hevc_nvenc --crf 25 --preset 7`。当播放器无法定位/拖拽 AV1 文件时,**使用 HEVC(hevc_nvenc)**——某些播放器对 AV1 的拖拽支持很差;H.265 拥有普遍的硬件解码与稳如磐石的拖动。**可定位性修复(强制,每次编码自动执行):** NVENC 默认几乎是无限 GOP(仅第 0 帧一个 IDR),导致文件无法定位(「拖不动」)。脚本在每次编码时无视编码器强制固定关键帧间隔:`-g` + `-keyint_min` 约为视频 2 秒(由源 fps 推算;fps 未知时回退 `-g 120`),并对 NVENC 额外加 `-forced-idr 1`,使周期关键帧成为真正的 IDR 帧。烧录后用 `ffprobe -select_streams v:0 -show_entries frame=key_frame` 验证——健康的文件应有大量(成百上千)关键帧,而不是 1 个。绝不要剥离这些标志。**码率封顶(强制,自动):** 最终输出码率绝不可超过源。当源码率已知时,脚本把视频流封顶到约源*视频*码率的 95%;**音频则强制转码为 AAC**(码率有界,以源码率为上限预算,只会让视频封顶略紧、绝不超源),因此视频+音频 ≤ 源总码率。这通过硬性的 VBR `-maxrate`/`-bufsize` 上限来强制。恒定质量模式(对 NVENC 用 `-cq`,对 SVT 用 `-crf`)在封顶期间**刻意避开**——它们会忽略 `-b:v` 并让输出膨胀(实测:`-rc vbr -cq 25` 在 857 kbps 的封顶下产出 5.4 Mbps)。当封顶生效时,`--crf` 被忽略,质量被码率限制到与源匹配。
 
 报告实际产物、分辨率、编码、所选字幕语言/种类,以及是否使用了 Chrome 鉴权——绝不要报告账号或 cookie 细节。让每个本地产物都能在 CodeBuddy 内直接打开:使用包在尖括号里的绝对路径 Markdown 目标,例如 `[打开字幕版](</absolute/job/path/字幕版「视频名」.mp4>)`。对最终 MP4,还应提供行内视频预览 `![字幕版](</absolute/job/path/字幕版「视频名」.mp4>)`。绝不要抛出裸路径,或含有空格/括号的未包裹 Markdown 目标。
 
@@ -191,7 +191,7 @@ git log --oneline
 
 **发布已在步骤③的 `--publish` 中自动完成**(烧录校验通过后即上传 MP4 + 中文封面);本「校验」步骤只负责 `verify_delivery.py` 校验,**不要在此再单独调用 `publish_bilibili.py`**(否则会重复上传)。仅当你需要补发/重发已烧好的成品时,才手动运行 `publish` 命令。依赖(装一次进受管 venv):`pip install bilibili-api` 与 `qrcode[pillow]`。
 
-当前版本:**v1.5**(HEAD 待提交;含 v1.4 重命名 + 「H.264 优先下载 / master 永远无损封装(绝不二次编码) / 烧录默认 H.264 且码率≤下载 / 强制流水线 + 发布不重复」改造)。
+当前版本:**v1.6**(HEAD 待提交;含 v1.5 的「H.264 优先下载 / master 永远无损封装 / 烧录默认 H.264 且码率≤下载 / 强制流水线」+ 本次「下载音频优先 AAC / master 音频只流复制 / 烧录音频强制转 AAC」)。
 
 鉴权——二维码登录(仅缓存 `SESSDATA`/`bili_jct`/`buvid3`,被 git 忽略,绝不打印):
 

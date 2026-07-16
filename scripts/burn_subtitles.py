@@ -20,7 +20,6 @@ from typing import Any, Sequence
 DEFAULT_ENCODER = "h264_nvenc"
 PROGRESS_BAR_WIDTH = 20
 PROGRESS_STEP_PERCENT = 5
-MP4_COPY_AUDIO_CODECS = frozenset({"aac", "ac3", "alac", "eac3", "mp3", "opus"})
 HDR_TRANSFERS = frozenset({"arib-std-b67", "smpte2084"})
 HDR_SIDE_DATA = (
     "content light level",
@@ -54,7 +53,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Burn an ASS subtitle file exactly once into an H.264 (default) / H.265(HEVC) / "
-            "AV1 MP4 while preserving the source dimensions and frame timing."
+            "AV1 MP4 while preserving the source dimensions and frame timing. "
+            "Audio is force-normalized to AAC for maximum MP4 / Bilibili compatibility."
         )
     )
     parser.add_argument("video", type=Path, help="input video")
@@ -623,26 +623,37 @@ def _require_subtitle_font(report: dict[str, Any], *, allow_missing_font: bool) 
     raise BurnError(f"{message} or pass --allow-missing-font to accept substitution")
 
 
-def _audio_options(audio_streams: Sequence[dict[str, Any]]) -> tuple[list[str], list[str]]:
+def _audio_options(
+    audio_streams: Sequence[dict[str, Any]], audio_bitrate: int = 0
+) -> tuple[list[str], list[str]]:
+    """Force every audio stream to AAC (bounded bitrate).
+
+    Rationale: some sources ship Opus / MP3 inside the container, which
+    Bilibili's MP4 ingest rejects. Normalizing to AAC at burn time keeps the
+    final MP4 maximally compatible. The output AAC bitrate is bounded by the
+    source audio bitrate (over-estimating the video-cap budget is safe: it only
+    makes the video ceiling slightly tighter, so video + audio <= source holds).
+    """
     if not audio_streams:
         return [], []
 
-    options = ["-c:a", "copy"]
+    bitrate = audio_bitrate if 0 < audio_bitrate <= 320_000 else 192_000
+    bitrate = max(96_000, bitrate)
+    options: list[str] = []
     modes: list[str] = []
     for output_index, stream in enumerate(audio_streams):
         codec = str(stream.get("codec_name", "")).lower()
-        if codec in MP4_COPY_AUDIO_CODECS:
-            modes.append(f"audio {output_index}: copied {codec}")
-            continue
         options.extend(
             [
                 f"-c:a:{output_index}",
                 "aac",
                 f"-b:a:{output_index}",
-                "256k",
+                f"{bitrate // 1000}k",
             ]
         )
-        modes.append(f"audio {output_index}: {codec or 'unknown'} -> AAC")
+        modes.append(
+            f"audio {output_index}: {codec or 'unknown'} -> AAC ({bitrate // 1000}k)"
+        )
     return options, modes
 
 
@@ -660,13 +671,14 @@ def _encode_command(
     encoder: str,
     video_bitrate_cap: int = 0,
     gop_frames: int = 0,
+    audio_bitrate: int = 0,
 ) -> tuple[list[str], list[str]]:
     try:
         stream_index = int(video_stream["index"])
     except (KeyError, TypeError, ValueError) as exc:
         raise BurnError("input video stream has no valid index") from exc
 
-    audio_options, audio_modes = _audio_options(audio_streams)
+    audio_options, audio_modes = _audio_options(audio_streams, audio_bitrate)
     subtitle_filter = f"subtitles=filename={_escape_filter_value(str(subtitle))}"
 
     # NVENC encoders use -cq instead of -crf, and integer presets
@@ -886,8 +898,9 @@ def burn_subtitles(
     # --- Output bitrate cap (<= source) ------------------------------------------
     # The final encoded (variable) bitrate must never exceed the original video's
     # bitrate. We cap the VIDEO stream so that video + audio <= source total.
-    # Audio is copied losslessly (see _audio_options), so its bitrate stays at the
-    # source value and the total stays bounded automatically.
+    # Audio is force-normalized to AAC at a bounded bitrate (see _audio_options),
+    # so we budget it with the SOURCE audio bitrate as an upper bound; this only
+    # makes the video ceiling slightly tighter, keeping the total bounded.
     def _int(v):
         try:
             return int(v)
@@ -945,6 +958,7 @@ def burn_subtitles(
         force=force,
         crf=crf,
         preset=preset,
+        audio_bitrate=source_audio_br,
         encoder=encoder,
         video_bitrate_cap=video_bitrate_cap,
         gop_frames=gop_frames,
