@@ -34,11 +34,17 @@ from typing import Any, NamedTuple, Sequence
 # The master MP4 is a LOSSLESS remux (copy) by default (see --master-codec):
 # no re-encode ever, so the only video re-encode in the pipeline is at the burn
 # step; master audio is stream-copied and force-normalized to AAC only at burn.
+# NOTE: the pure-audio fallback `/bestaudio` MUST stay at the very END of the
+# chain. A mid-chain `/bestaudio` (as the original had after every video tier)
+# short-circuits yt-dlp: when the first video tier is unavailable it stops at the
+# immediately-following `bestaudio` and never reaches the later video tiers, so
+# you get an audio-only download even though a valid H.264+AAC combo exists.
 DEFAULT_FORMAT = (
-    "bestvideo[height<=1080][fps>=60][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestaudio"
-    "/bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestaudio"
-    "/bestvideo[height<=1080]+bestaudio[acodec^=mp4a]/bestaudio"
+    "bestvideo[height<=1080][fps>=60][vcodec^=avc1]+bestaudio[acodec^=mp4a]"
+    "/bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]"
+    "/bestvideo[height<=1080]+bestaudio[acodec^=mp4a]"
     "/best[height<=1080][acodec^=mp4a]/best[height<=1080]"
+    "/bestaudio"
 )
 FORMAT_SELECTOR = DEFAULT_FORMAT  # kept for back-compat references
 DEFAULT_MASTER_CODEC = "copy"  # copy | hevc | h264
@@ -272,7 +278,10 @@ def ytdlp_common_args(
         YOUTUBE_SKIP_TRANSLATIONS,
     ]
     if allow_remote_ejs:
-        args.extend(["--remote-components", "ejs:npm"])
+        # Prefer the GitHub-hosted EJS solver over npm: it runs via the
+        # Node.js js-runtime (--js-runtimes) and does NOT require Deno.
+        # The npm path (ejs:npm) hard-requires Deno in current yt-dlp builds.
+        args.extend(["--remote-components", "ejs:github"])
     if js_runtime:
         args.extend(["--js-runtimes", f"node:{js_runtime}"])
     if browser_cookies:
@@ -1125,7 +1134,7 @@ def _manifest_base(
         },
         "remote_components": {
             "ejs_allowed": allow_remote_ejs,
-            "ejs_source": "npm" if allow_remote_ejs else None,
+            "ejs_source": "github" if allow_remote_ejs else None,
         },
         "selection": {
             "playlist_allowed": False,
@@ -1380,11 +1389,10 @@ def execute(args: argparse.Namespace) -> Path | None:
         "yt-dlp",
         "Install the current official yt-dlp release and ensure the binary is executable.",
     )
-    if args.allow_remote_ejs:
-        _require_executable(
-            "deno",
-            "--allow-remote-ejs uses the official ejs:npm path and therefore requires Deno.",
-        )
+    # NOTE: --allow-remote-ejs now uses the GitHub-hosted EJS solver
+    # (ejs:github), which runs via the Node.js js-runtime and does NOT
+    # require Deno. The npm path (ejs:npm) hard-requires Deno in current
+    # yt-dlp builds, so we deliberately avoid it. No Deno precheck here.
     output_dir = Path(args.output_dir).expanduser().resolve()
     _prepare_output_dir(output_dir, resume=args.resume)
 
@@ -1453,9 +1461,10 @@ def execute(args: argparse.Namespace) -> Path | None:
         "Install FFmpeg with ffprobe; it is required to verify downloaded media.",
     )
     if "youtube" in str(info.get("extractor_key") or info.get("extractor") or "").lower():
-        if not shutil.which("deno"):
+        if not args.js_runtime and not shutil.which("deno"):
             manifest["warnings"].append(
-                "Deno was not found; current yt-dlp may expose fewer YouTube formats without a supported JS runtime"
+                "No JS runtime supplied; pass --js-runtime <node.exe> so the "
+                "GitHub-hosted EJS solver can run (Deno is not required)."
             )
 
     base = safe_stem(info.get("title"), info.get("id"))
@@ -1681,8 +1690,8 @@ def run_self_tests() -> bool:
             index = common.index("--cookies-from-browser")
             self.assertEqual(common[index + 1], "chrome:Profile 1")
             self.assertNotIn("--cookies", common)
-            self.assertIn("ejs:npm", common)
-            self.assertNotIn("ejs:github", common)
+            self.assertIn("ejs:github", common)
+            self.assertNotIn("ejs:npm", common)
 
         def test_auto_cookie_mode_is_resolved_before_ytdlp(self) -> None:
             with self.assertRaisesRegex(FetchError, "must be resolved"):
@@ -2175,7 +2184,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-remote-ejs",
         action="store_true",
-        help="Allow yt-dlp to fetch the EJS component from npm via Deno when required",
+        help=(
+            "Allow yt-dlp to fetch the EJS challenge solver from GitHub and run it "
+            "via the Node.js --js-runtime (no Deno required). Needed for YouTube "
+            "videos that enforce the 'n' parameter challenge."
+        ),
     )
     parser.add_argument(
         "--proxy",
