@@ -20,6 +20,12 @@ import tempfile
 import unicodedata
 from typing import Any, Iterable, Iterator, Sequence
 
+# Make sibling scripts importable and install the best-effort delete shim so
+# the pipeline never crashes on a sandbox "safe delete" interception.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import install_safe_delete
+install_safe_delete()
+
 
 SCHEMA_VERSION = 1
 PIPELINE_VERSION = "1.1"
@@ -49,6 +55,8 @@ ASS_PLAY_RES_Y = 1080
 ASS_MARGIN_X = 80
 ASS_BOTTOM_MARGIN = 50
 PORTRAIT_BOTTOM_MARGIN = 120
+# 中文字幕抬高到原字幕带上方的间隙（占全帧高度比例）。
+GAP_FRAC = 0.025
 DEFAULT_VIDEO_SIZE = (1920, 1080)
 
 
@@ -1079,28 +1087,47 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def _target_placement(manifest, hardsub):
-    """Given a hardsub-band JSON (detect_hardsub_band.py) decide where the
-    Chinese-only subtitle should sit so it does not cover the original burned-in
-    subtitle. Returns {alignment, pos_y, margin_v, side} for the Target style."""
+    """Decide where the Chinese-only burn track sits.
+
+    Principle (per user requirement): subtitles live in the bottom region; the
+    detector only answers "does the bottom region have a burned-in subtitle?".
+    The Chinese track is ALWAYS bottom-anchored (alignment 2) and never moved to
+    the top. If the bottom region already carries a subtitle, the Chinese track
+    is raised just above that band so the two never overlap.
+
+    Returns {alignment, pos_y, margin_v, side} for the Target style.
+    """
     layout = _ass_layout(manifest)
+    play_res_y = layout["play_res_y"]
     bottom = {
         "alignment": 2,
-        "pos_y": layout["play_res_y"] - layout["bottom_margin"],
+        "pos_y": play_res_y - layout["bottom_margin"],
         "margin_v": layout["bottom_margin"],
         "side": "bottom",
     }
     if not hardsub:
         return bottom
-    rec = hardsub.get("recommend_alignment")
-    if rec in (2, 8):
-        margin_v = int(hardsub.get("margin_v", 60))
-        pos_y = margin_v if rec == 8 else layout["play_res_y"] - margin_v
-        return {
-            "alignment": rec,
-            "pos_y": pos_y,
-            "margin_v": margin_v,
-            "side": hardsub.get("side", "auto"),
-        }
+    # New detector schema: bottom_has_subtitle + bottom_band (0-1 full-frame y).
+    if hardsub.get("bottom_has_subtitle"):
+        band = hardsub.get("bottom_band") or {}
+        y0 = band.get("y0")
+        if y0 is not None:
+            gap = GAP_FRAC
+            # Chinese bottom edge should sit `gap` above the original band's top.
+            desired_bottom_edge_frac = max(0.0, float(y0) - gap)
+            margin_v = int(round((1.0 - desired_bottom_edge_frac) * play_res_y))
+            # Keep it sane: at least the standard bottom margin, and not higher
+            # than 55% of the frame so it stays inside the bottom region.
+            margin_v = max(
+                layout["bottom_margin"],
+                min(margin_v, int(play_res_y * 0.55)),
+            )
+            return {
+                "alignment": 2,
+                "pos_y": play_res_y - margin_v,
+                "margin_v": margin_v,
+                "side": "bottom_above",
+            }
     return bottom
 
 
@@ -1366,7 +1393,7 @@ def _parser() -> argparse.ArgumentParser:
             "--hardsub",
             type=Path,
             default=None,
-            help="hardsub-band JSON from detect_hardsub_band.py; places the Chinese subtitle on the opposite side of detected burned-in subtitles",
+            help="hardsub-band JSON from detect_hardsub_band.py; if the bottom region has a burned-in subtitle, the Chinese track is raised just above it (always stays in the bottom region, never moved to the top)",
         )
 
     validate_parser = commands.add_parser("validate", help="validate existing bilingual subtitle artifacts")

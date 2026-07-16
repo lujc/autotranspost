@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -42,6 +43,12 @@ import sys
 import time
 import urllib.parse as up
 from pathlib import Path
+
+# Install the best-effort delete shim so the pipeline never crashes on a
+# sandbox "safe delete" interception (no-op on normal hosts).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import install_safe_delete
+install_safe_delete()
 
 import requests
 from bilibili_api import video, utils
@@ -496,7 +503,7 @@ def _upload_and_submit(
     meta: dict,
     verify: Verify,
     cn_cover_path: Path | None = None,
-) -> None:
+) -> tuple[str | None, str | None]:
     # 1) cover — prefer the rendered Chinese-title cover when present.
     effective_cover = cn_cover_path or cover_path
     cover_url = ""
@@ -546,6 +553,8 @@ def _upload_and_submit(
         ],
     }
     last = None
+    bv = None
+    aid = None
     for attempt in range(1, 4):
         try:
             resp = video.video_submit(data, verify)
@@ -556,8 +565,9 @@ def _upload_and_submit(
                 bv = resp["bvid"]
                 if not bv.startswith("BV"):
                     bv = f"BV{bv}"
-                print(f"投稿成功：{bv} (aid={resp.get('aid', '?')})")
-                return
+                aid = resp.get("aid")
+                print(f"投稿成功：{bv} (aid={aid})")
+                return bv, aid
             sys.stderr.write(f"  投稿返回异常（第 {attempt} 次）：{resp}\n")
         except Exception as e:
             sys.stderr.write(f"  投稿失败（第 {attempt} 次）：{e}\n")
@@ -569,8 +579,9 @@ def _upload_and_submit(
         bv = last["bvid"]
         if not bv.startswith("BV"):
             bv = f"BV{bv}"
-        print(f"投稿成功（重试末次）：{bv} (aid={last.get('aid', '?')})")
-        return
+        aid = last.get("aid")
+        print(f"投稿成功（重试末次）：{bv} (aid={aid})")
+        return bv, aid
     sys.stderr.write(f"投稿最终失败，最后响应：{last}\n")
     sys.exit(1)
 
@@ -618,7 +629,23 @@ def cmd_publish(args) -> None:
     if not ok:
         sys.stderr.write(f"登录态失效（{uname}），请重新 login。\n")
         sys.exit(1)
-    _upload_and_submit(video_path, cover_path, meta, verify, cn_cover_path=cn_cover)
+    bv, aid = _upload_and_submit(
+        video_path, cover_path, meta, verify, cn_cover_path=cn_cover
+    )
+    if bv:
+        result = {
+            "bvid": bv,
+            "aid": aid,
+            "title": meta.get("title"),
+            "cn_title": args.cn_title or meta.get("title"),
+            "video": str(video_path),
+            "published_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        result_path = job / "publish-result.json"
+        result_path.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"已写入投稿结果：{result_path}")
 
 
 # --------------------------------------------------------------------------

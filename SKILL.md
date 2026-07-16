@@ -25,6 +25,35 @@ description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt
 
 把包含本文件的技能目录作为 `<skill-dir>`。新建一个空的 `<job-dir>`。
 
+> ⚠️ **全程前台运行，禁止后台化。** 所有步骤（下载、检测、渲染、烧录、发布）都用普通前台命令一次性跑完，**不要**用 `run_in_background`、也不要把命令管道接到 `| tail` 之类缓冲后再等待。下载完成后流水线必须**在同一轮对话里立刻继续**，绝不能在「等完成通知」后结束本轮——否则流水线会在下载完成与翻译开始之间空窗数分钟（此前在多支视频上复现过）。`pipeline.py` 已把「下载之后的所有确定性步骤」合成一个前台命令，从机制上消除这个空窗。
+
+### 推荐：用 `pipeline.py` 单入口前台驱动
+
+下载、硬字幕检测、渲染、烧录、发布都已内置 `common.install_safe_delete()`（沙箱拦截删除时自动降级为「尽力而为」，不再需要 `env -u PYTHONPATH` 之类绕过）。整条流水线只需两条前台命令 + 一个翻译循环：
+
+```bash
+# 1) 下载（前台，~1–2 分钟，结束即返回）
+python3 <skill-dir>/scripts/pipeline.py download -- \
+  "<video-url>" --output-dir "<job-dir>" --browser-cookies auto \
+  --js-runtime "<node.exe>" --merge-mp4
+
+# 2) 翻译循环（每次取一个批次，翻译后写回，直到 done:true）
+python3 <skill-dir>/scripts/subtitle_pipeline.py next-batch \
+  --manifest "<job-dir>/subtitles/subtitle-manifest.json"
+#   → 把 batch.items 译成中文，按 translation-contract.md 形状写回 output_path
+#   → 重复直到 next-batch 返回 done:true
+
+# 3) 检测 → 渲染 → 烧录 →（可选）发布，全部前台一步完成
+python3 <skill-dir>/scripts/pipeline.py finalize \
+  --job "<job-dir>" --cn-title "<中文标题>" --publish
+```
+
+`pipeline.py finalize` 会在 `--job` 里自动定位 `*.master.mp4`、跑 `detect_hardsub_band.py` → `subtitle_pipeline.py render` → `burn_subtitles.py`（带 `--publish` 时自动发 B 站），并把投稿结果（BV 号）写入 `<job-dir>/publish-result.json`。**翻译结果（subtitles/translation-output/batch-*.json）必须在 finalize 之前由你完成**，否则 finalize 会明确报错退出、不会静默产出无字幕成品。
+
+### 也可以逐步手动运行（等价）
+
+下面是每条阶段命令；`pipeline.py finalize` 就是按这个顺序自动串起来的，二选一即可。
+
 ```bash
 python3 <skill-dir>/scripts/fetch_video.py \
   "<video-url>" --output-dir "<job-dir>" --browser-cookies auto \
@@ -95,7 +124,11 @@ python3 <skill-dir>/scripts/subtitle_pipeline.py next-batch \
 
 队列完成后,按以下**强制顺序**逐步执行。每一步都是必跑项,不得跳过或合并。
 
-> ⚠️ **本机 Windows 沙箱必做（漏做必崩/卡住）**：下方每条 Python 命令都用 **venv python** `C:/Users/lujc/.workbuddy/binaries/python/envs/default/Scripts/python.exe`，且**启动前缀**加 `env -u PYTHONPATH`（或 `CODEBUDDY_SAFE_DELETE_SANDBOX=0`）；`--output-dir` 用 **原生 `E:/...` 或相对 `jobs/<id>`**，绝不用 `/e/...`。ffmpeg 在 `D:/Apps/FFmpeg/bin`。详见上方「本环境必做」一节。
+> ⚠️ **运行环境要求（已尽量代码内置，无需逐命令绕过）**：
+> - **Python**：任意 3.10+，已装 `numpy`、`requests`、`bilibili_api`、`yt-dlp` 即可。`detect_*` / `subtitle_pipeline.py render` 需要 numpy；`publish_bilibili.py` 需要 `bilibili_api`。本技能各脚本在顶部自动 `install_safe_delete()`，**沙箱「安全删除」拦截删除时自动降级为尽力而为、不会崩溃**——因此不再需要 `env -u PYTHONPATH` 或 `CODEBUDDY_SAFE_DELETE_SANDBOX=0`（保留也无害）。
+> - **ffmpeg / ffprobe**：在 `PATH` 中（macOS 上优先用 Homebrew 的 `ffmpeg-full` 以获得 libass 字幕滤镜）；也可经 `--ffmpeg` 显式指定。
+> - **路径**：`--output-dir` 用原生绝对路径或相对路径均可；脚本通过 `__file__` 自动定位同级脚本，无需 `cd` 到技能目录。
+> - **MiSans 字体**：未安装时 `burn_subtitles.py` 自动下载安装，无需手动。
 
 ### 步骤① 硬烧录字幕带检测(必跑)
 
@@ -153,31 +186,21 @@ python3 <skill-dir>/scripts/verify_delivery.py "<job-dir>/download-manifest.json
 
 - 需要 Python 3.10+、yt-dlp、ffmpeg/ffprobe 与 MiSans。`burn_subtitles.py` 会在不倾倒完整滤镜列表的情况下检查 libass 与 MiSans 字体,在 macOS 上优先使用 Homebrew 的 `ffmpeg-full`。**若 MiSans 未安装,烧录脚本会自动从 `https://hyperos.mi.com/font-download/MiSans.zip` 下载并安装(无需手动操作);仅在下载/解压失败时才会提示手动安装。**
 
-### 本环境必做（WorkBuddy Windows 沙箱，已实测，漏做即崩/重复运行）
+### 运行环境（实战参考，已尽量固化进代码）
 
-本技能在本机（Windows + WorkBuddy 沙箱）运行时，有 3 个环境特异性坑。它们**不会**被上面的"干净环境"假设覆盖，必须每次都做，否则会中途崩溃、看似卡住或被迫重跑：
+下面这些坑大多已经由代码本身解决（见上「运行环境要求」），此处保留为排障参考；**不要再逐命令加 `env -u PYTHONPATH` 之类绕过**——`common.install_safe_delete()` 已让临时文件清理在沙箱拦截时降级为「尽力而为」。
 
-1. **Python 解释器统一用受管 venv**（不是 base 受管 python）：
-   `C:/Users/lujc/.workbuddy/binaries/python/envs/default/Scripts/python.exe`
-   该 venv 已装 `numpy 2.5.1 + requests + bilibili_api`。base 受管 python（`.../versions/3.13.12/python.exe`）**缺 numpy**，会让 `detect_hardsub_band.py` / `subtitle_pipeline.py render` 直接 `ImportError` 崩。所有 `fetch_video.py` / `detect_*` / `subtitle_pipeline.py` / `burn_subtitles.py` / `publish_bilibili.py` 都用这个 venv python 跑。
+1. **Python**：任意 3.10+，装好 `numpy`、`requests`、`bilibili_api`、`yt-dlp` 即可。`detect_*` / `subtitle_pipeline.py render` 需要 numpy；`publish_bilibili.py` 需要 `bilibili_api`。脚本通过 `__file__` 自动定位同级脚本，无需 `cd` 到技能目录。
 
-2. **每个会删临时文件的脚本，启动时必须绕开安全删除 shim**（二选一，效果相同）：
-   - `env -u PYTHONPATH "<venv_python>" ...`，或
-   - `CODEBUDDY_SAFE_DELETE_SANDBOX=0 "<venv_python>" ...`
-   
-   原因：本沙箱在 `PYTHONPATH` 注入 `sitecustomize.py`，把 `os.remove/unlink/rmdir/shutil.rmtree/pathlib.unlink` 全部改道到回收站；而 Windows 沙箱**没有回收站**，于是在 `_IN_SANDBOX==1`（**import 时读取，脚本内无法自修**）时直接 `raise OSError`（FAIL_CLOSED）。触发点：`fetch_video.py` 的 mkv→mp4 重封装临时文件清理、`burn_subtitles.py` 的临时文件清理。漏做 → 下载/烧录在收尾时崩。临时文件落在系统 `%TMP%` 下不被拦，但本技能把临时文件放在 job 目录内，必然被拦。
+2. **安全删除沙箱（已代码修复）**：部分托管运行时会在 `sitecustomize.py` 把 `os.remove/unlink/rmdir/shutil.rmtree/pathlib.unlink` 改道到回收站；当环境无可用的回收站时会 `raise OSError`（FAIL_CLOSED），导致下载/烧录在收尾清理临时文件时崩溃。各脚本顶部已 `install_safe_delete()` 把删除降级为尽力而为，因此**不再需要** `env -u PYTHONPATH` 或 `CODEBUDDY_SAFE_DELETE_SANDBOX=0`。若你自己的环境有不同删除拦截，这段 shim 也能兜住。
 
-3. **`--output-dir` 路径用 Windows 原生或相对路径，绝不用 git-bash 风格**：
-   - ✅ `E:/lujc/WorkBuddy/本地系统/jobs/<id>`（原生绝对）
-   - ✅ `jobs/<id>`（相对，从项目根 E: 解析）
-   - ❌ `/e/lujc/WorkBuddy/本地系统/jobs/<id>`（git-bash 风格）→ Windows-Python 的 `os.path.abspath` 会误读成 `e:\e\lujc\...`，导致「目录非空」误判 / 写入错目录 / 需手动清理游离目录。
-   - yt-dlp / ffmpeg / ffprobe 在 `D:/Apps/FFmpeg/bin`（运行前 `export PATH="/d/Apps/FFmpeg/bin:$PATH"`）。
+3. **路径风格（通用坑）**：`--output-dir` 用 Windows 原生绝对路径（`E:/...`）或相对路径（`jobs/<id>`），**不要用 git-bash 风格 `/e/...`**——Windows-Python 的 `os.path.abspath` 会把它误读成 `e:\e\...`，造成目录判断错误。ffmpeg/ffprobe/yt-dlp 放在 `PATH` 中即可（macOS 可放 Homebrew 的 `ffmpeg-full` 以获得 libass 字幕滤镜）。
 
-4. **代理**：YouTube 下载与 B 站发布都走 `127.0.0.1:7890`。下载命令加 `--proxy http://127.0.0.1:7890`；发布脚本读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量（本机已设）。
+4. **代理（按你的网络环境选择）**：若访问 YouTube / B 站需要代理，下载命令加 `--proxy http://<host>:<port>`，发布脚本读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量。无需代理则都不传。
 
-5. **字体/编码**：MiSans 已在 `~/.fonts`，无需下载；`h264_nvenc` 可用，烧录走 NVENC。
+5. **硬件编码（按你的机器选择）**：有 NVIDIA 显卡时烧录默认走 `h264_nvenc`（自动回退 `libx264`）；无独显则自动用 CPU 编码。MiSans 未安装时 `burn_subtitles.py` 自动下载安装。
 
-> 以上 1–4 任一条漏做，都会导致「看似卡住 / 中途崩 / 重复运行」。本机已多次踩坑并验证上述为唯一稳定组合。
+> 这些曾经是「本机必做」的硬约束，现已下沉为代码内置行为或「按需可选」的环境参数，导出到其他环境无需逐条手动配置。
 - YouTube 需要一个受支持的 JavaScript 运行时;优先用 Deno 2.3+。仅在遇到下载器、格式、字幕、JS 运行时或 PO-token 错误时,才去读 [platform-notes.md](references/platform-notes.md)。
 - 仅在鉴权失败时才去读 [chrome-auth.md](references/chrome-auth.md)。
 - 若源语言选择有歧义,用 `--source-lang` 询问;绝不要假设某条翻译轨就是原文。

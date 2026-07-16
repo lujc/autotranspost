@@ -20,6 +20,13 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Sequence
 
+# Make sibling scripts importable and install the best-effort delete shim so
+# the pipeline never crashes on a sandbox "safe delete" interception.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import install_safe_delete
+install_safe_delete()
+
 
 DEFAULT_ENCODER = "h264_nvenc"
 PROGRESS_BAR_WIDTH = 20

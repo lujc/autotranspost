@@ -26,6 +26,13 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, NamedTuple, Sequence
 
+# Make sibling scripts importable and install the best-effort delete shim so
+# the pipeline never crashes on a sandbox "safe delete" interception.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import install_safe_delete
+install_safe_delete()
+
 
 # Default download format: prefer H.264 (avc1) at 1080p, 60fps when available,
 # Priorities, in order: 1080p H.264 (60fps if available) with AAC audio,
