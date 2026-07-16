@@ -1,0 +1,16 @@
+# AutoTransPost 技能依赖
+# 安装方式：pip install -r requirements.txt
+
+# B 站 API（投稿视频、封面上传、元数据提交）
+bilibili-api>=4.0.0
+
+# 二维码生成（B 站登录用）
+qrcode[pillow]>=7.0
+
+# HTTP 请求库（用于 B 站 API 调用）
+requests>=2.28
+
+# 以下为系统级依赖，请另行安装（不在 requirements.txt 中）：
+# - yt-dlp（视频下载）：pip install yt-dlp 或 https://github.com/yt-dlp/yt-dlp
+# - ffmpeg / ffprobe（视频处理）：https://ffmpeg.org
+# - Node.js（YouTube 签名解密，可选）：https://nodejs.org

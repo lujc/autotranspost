@@ -7,6 +7,34 @@ description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt
 
 每个任务目录处理一个已授权的视频,并跑完适用的完整流水线。
 
+## 前置依赖
+
+### Python 包（pip install -r requirements.txt）
+
+核心依赖包括：
+
+| 包 | 用途 |
+|----|------|
+| `bilibili-api` | B 站投稿（视频上传、封面上传、元数据提交） |
+| `qrcode[pillow]` | B 站二维码登录生成 |
+| `requests` | HTTP API 调用 |
+
+```bash
+pip install -r requirements.txt
+```
+
+### 系统可执行文件
+
+| 工具 | 用途 | 安装方式 |
+|------|------|----------|
+| `ffmpeg` / `ffprobe` | 视频处理（抽帧、编码、烧录字幕） | https://ffmpeg.org 或包管理器 |
+| `yt-dlp` | 视频下载（YouTube／B 站等） | `pip install yt-dlp` 或 https://github.com/yt-dlp/yt-dlp |
+| `node` | YouTube 签名解密（可选） | https://nodejs.org
+
+### 字体
+
+烧录字幕使用 **MiSans Bold**。未安装时 `burn_subtitles.py` 自动从小米官网下载安装。
+
 ## 不变式（Invariants）
 
 1. 绝不绕过 DRM、付费墙、CAPTCHA 或安全插播。
