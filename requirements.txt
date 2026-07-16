@@ -2,7 +2,9 @@
 # 安装方式：pip install -r requirements.txt
 
 # B 站 API（投稿视频、封面上传、元数据提交）
-bilibili-api>=4.0.0
+# 注意：代码使用 v4.x 同步 API（Verify + video_upload/video_submit），
+#       v5+ 已改为全异步类式 API，不兼容。必须锁 <5.0。
+bilibili-api>=4.0.0,<5.0.0
 
 # 二维码生成（B 站登录用）
 qrcode[pillow]>=7.0

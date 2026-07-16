@@ -15,7 +15,7 @@ description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt
 
 | 包 | 用途 |
 |----|------|
-| `bilibili-api` | B 站投稿（视频上传、封面上传、元数据提交） |
+| `bilibili-api` | B 站投稿（视频上传、封面上传、元数据提交） — **必须使用 v4.x，v5+ 不兼容** |
 | `qrcode[pillow]` | B 站二维码登录生成 |
 | `requests` | HTTP API 调用 |
 
