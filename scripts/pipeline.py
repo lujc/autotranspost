@@ -17,6 +17,9 @@ require the LLM into foreground commands the agent runs in one shot:
   pipeline.py download -- <fetch_video.py args...>   # download + cover + subs
   pipeline.py finalize  --job DIR --cn-title T [--publish] [--proxy P]
 
+Note: Hardsub detection (detect_hardsub_band.py) has been removed. Chinese
+subtitles are always placed at the bottom of the video.
+
 The only step still driven by the agent is the *translation* (it needs the
 LLM): `subtitle_pipeline.py next-batch` → write `translation-output/batch-*.json`
 → repeat. That loop is fast and inline, so it is never backgrounded.
@@ -97,14 +100,6 @@ def cmd_finalize(args) -> None:
     master = _find_master(job)
     print(f"master: {master}")
     ffmpeg = _resolve_ffmpeg(args.ffmpeg)
-    hardsub = job / "hardsub_band.json"
-
-    # Stage 1: hard-subtitle band detection (Chinese subtitles avoid it).
-    _run_script(
-        "detect_hardsub_band.py",
-        [str(master), "--out", str(hardsub), "--ffmpeg", ffmpeg],
-    )
-
     # Guard: translations must already exist (the agent performs translation
     # via the LLM before invoking finalize). Fail loudly otherwise.
     manifest = job / "subtitles" / "subtitle-manifest.json"
@@ -118,7 +113,8 @@ def cmd_finalize(args) -> None:
             "请先用 `subtitle_pipeline.py next-batch` 取批次、翻译并写回，再运行 finalize。"
         )
 
-    # Stage 2: render (Chinese-only zh-CN.ass).
+    # Stage 2: render (Chinese-only zh-CN.ass). No hardsub detection needed;
+    # Chinese subtitles always stay at the bottom.
     out_dir = job / "subtitles" / "rendered"
     out_dir.mkdir(parents=True, exist_ok=True)
     _run_script(
@@ -129,7 +125,6 @@ def cmd_finalize(args) -> None:
             "--translations-dir", str(trans_dir),
             "--output-dir", str(out_dir),
             "--font", args.font,
-            "--hardsub", str(hardsub),
         ],
     )
     ass = out_dir / "zh-CN.ass"
@@ -165,7 +160,7 @@ def main(argv) -> None:
     p = argparse.ArgumentParser(prog="pipeline.py", description="autotranspost 流水线编排")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    fz = sub.add_parser("finalize", help="检测→渲染→烧录→(发布) 合一步骤（前台）")
+    fz = sub.add_parser("finalize", help="渲染→烧录→(发布) 合一步骤（前台，无硬字幕检测）")
     fz.add_argument("--job", required=True, help="job 目录")
     fz.add_argument("--cn-title", default="", help="B 站中文标题（--publish 时使用）")
     fz.add_argument("--publish", action="store_true", help="烧录后自动发布 B 站")

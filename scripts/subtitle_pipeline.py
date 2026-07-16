@@ -1197,15 +1197,8 @@ def _expected_outputs(
 ) -> dict[str, bytes]:
     cue_by_id = _cue_map(manifest)
     layout = _ass_layout(manifest)
-    # When no explicit hardsub is passed, reuse the sidecar written next to the
-    # rendered outputs so that `validate` reproduces the same placement.
-    if hardsub is None and output_dir is not None:
-        cand = Path(output_dir) / "hardsub_band.json"
-        if cand.exists():
-            try:
-                hardsub = json.loads(cand.read_text(encoding="utf-8"))
-            except Exception:
-                hardsub = None
+    # Hardsub detection has been removed; Chinese subtitles always stay at the
+    # bottom. The hardsub parameter is preserved for API compatibility only.
     target_language = str(manifest.get("target_language") or DEFAULT_TARGET_LANGUAGE)
     source_entries: list[tuple[int, int, str]] = []
     target_entries: list[tuple[int, int, str]] = []
@@ -1313,8 +1306,6 @@ def render(
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, data in expected.items():
         _atomic_write(output_dir / name, data)
-    if hardsub is not None:
-        _atomic_write(output_dir / "hardsub_band.json", _json_bytes(hardsub))
     destination_manifest = output_dir / MANIFEST_NAME
     if destination_manifest.resolve() != manifest_path:
         _atomic_write(destination_manifest, manifest_path.read_bytes())
@@ -1393,7 +1384,7 @@ def _parser() -> argparse.ArgumentParser:
             "--hardsub",
             type=Path,
             default=None,
-            help="hardsub-band JSON from detect_hardsub_band.py; if the bottom region has a burned-in subtitle, the Chinese track is raised just above it (always stays in the bottom region, never moved to the top)",
+            help="(已弃用) 硬字幕检测已移除，字幕始终放底部；此参数保留仅向后兼容",
         )
 
     validate_parser = commands.add_parser("validate", help="validate existing bilingual subtitle artifacts")
@@ -1434,16 +1425,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "next-batch":
             payload = {"ok": True, **next_translation_batch(args.manifest)}
         elif args.command == "render":
-            hardsub = None
-            if args.hardsub and args.hardsub.exists():
-                try:
-                    hardsub = json.loads(args.hardsub.read_text(encoding="utf-8"))
-                except Exception as e:  # pragma: no cover
-                    sys.stderr.write(f"忽略无法解析的 --hardsub：{e}\n")
-                    hardsub = None
             result = render(
                 args.manifest, args.translations_dir, args.output_dir, args.font,
-                source_is_above=not args.swap_lines, hardsub=hardsub,
+                source_is_above=not args.swap_lines,
             )
             payload = {"ok": True, "validation": str(result)}
         else:

@@ -14,7 +14,7 @@ description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt
 3. 只翻译紧凑批次里的 `id` 与 `source` 为批次声明的 `target_language`;只输出 `id` 与 `translation`。绝不改写源文本或 ID。
 4. 使用当前会话模型(智能体自身)翻译。除非用户明确要求,否则不调用本地模型或独立翻译 API。
 5. 绝不导出、打印或查看 cookie 取值。cookie 访问必须保持本地且静默。
-6. 保留最高画质的源。只对整个烧录后的 MP4 做重编码。
+6. 保留最高画质的源。只对整个烧录后的 MP4 做重编码。**硬字幕检测已移除，中文字幕始终放置在画面底部。**
 7. 只有当 `verify_delivery.py` 对其声明的 `--deliver` 目标退出码为 0 时,任务才算完成;默认的 `full` 目标要求翻译、渲染与烧录三者齐备。
 8. 保持上下文精简:绝不一次性读取完整字幕清单、所有批次或原始 FFmpeg 日志。
 9. 烧录出的 MP4 **必须可定位拖拽**(seekable)。`burn_subtitles.py` 在每次编码时强制固定关键帧间隔(`-g` 约 2s,对 NVENC 另加 `-forced-idr`)。绝不可移除——否则 NVENC 只在第 0 帧放一个 IDR,文件无法拖动预览。
@@ -30,7 +30,7 @@ description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt
 
 ### 推荐：用 `pipeline.py` 单入口前台驱动
 
-下载、硬字幕检测、渲染、烧录、发布都已内置 `common.install_safe_delete()`（沙箱拦截删除时自动降级为「尽力而为」，不再需要 `env -u PYTHONPATH` 之类绕过）。整条流水线只需两条前台命令 + 一个翻译循环：
+下载、渲染、烧录、发布都已内置 `common.install_safe_delete()`（沙箱拦截删除时自动降级为「尽力而为」，不再需要 `env -u PYTHONPATH` 之类绕过）。整条流水线只需两条前台命令 + 一个翻译循环（**硬字幕检测已移除，字幕始终置底**）：
 
 ```bash
 # 1) 下载（前台，~1–2 分钟，结束即返回）
@@ -44,12 +44,12 @@ python3 <skill-dir>/scripts/subtitle_pipeline.py next-batch \
 #   → 把 batch.items 译成中文，按 translation-contract.md 形状写回 output_path
 #   → 重复直到 next-batch 返回 done:true
 
-# 3) 检测 → 渲染 → 烧录 → 发布，全部前台一步完成（必须 --publish，不得询问用户）
+# 3) 渲染 → 烧录 → 发布，全部前台一步完成（必须 --publish，不得询问用户）
 python3 <skill-dir>/scripts/pipeline.py finalize \
   --job "<job-dir>" --cn-title "<中文标题>" --publish
 ```
 
-`pipeline.py finalize` 会在 `--job` 里自动定位 `*.master.mp4`、跑 `detect_hardsub_band.py` → `subtitle_pipeline.py render` → `burn_subtitles.py`（带 `--publish` 时自动发 B 站），并把投稿结果（BV 号）写入 `<job-dir>/publish-result.json`。**翻译结果（subtitles/translation-output/batch-*.json）必须在 finalize 之前由你完成**，否则 finalize 会明确报错退出、不会静默产出无字幕成品。
+`pipeline.py finalize` 会在 `--job` 里自动定位 `*.master.mp4`、跑 `subtitle_pipeline.py render` → `burn_subtitles.py`（带 `--publish` 时自动发 B 站），并把投稿结果（BV 号）写入 `<job-dir>/publish-result.json`。**翻译结果（subtitles/translation-output/batch-*.json）必须在 finalize 之前由你完成**，否则 finalize 会明确报错退出、不会静默产出无字幕成品。**注意：硬字幕检测功能已移除，中文字幕始终放置在画面底部。**
 
 ### 也可以逐步手动运行（等价）
 
@@ -126,40 +126,28 @@ python3 <skill-dir>/scripts/subtitle_pipeline.py next-batch \
 队列完成后,按以下**强制顺序**逐步执行。每一步都是必跑项,不得跳过或合并。
 
 > ⚠️ **运行环境要求（已尽量代码内置，无需逐命令绕过）**：
-> - **Python**：任意 3.10+，已装 `numpy`、`requests`、`bilibili_api`、`yt-dlp` 即可。`detect_*` / `subtitle_pipeline.py render` 需要 numpy；`publish_bilibili.py` 需要 `bilibili_api`。本技能各脚本在顶部自动 `install_safe_delete()`，**沙箱「安全删除」拦截删除时自动降级为尽力而为、不会崩溃**——因此不再需要 `env -u PYTHONPATH` 或 `CODEBUDDY_SAFE_DELETE_SANDBOX=0`（保留也无害）。
+> - **Python**：任意 3.10+，已装 `numpy`、`requests`、`bilibili_api`、`yt-dlp` 即可。`subtitle_pipeline.py render` 需要 numpy；`publish_bilibili.py` 需要 `bilibili_api`。本技能各脚本在顶部自动 `install_safe_delete()`，**沙箱「安全删除」拦截删除时自动降级为尽力而为、不会崩溃**——因此不再需要 `env -u PYTHONPATH` 或 `CODEBUDDY_SAFE_DELETE_SANDBOX=0`（保留也无害）。
 > - **ffmpeg / ffprobe**：在 `PATH` 中（macOS 上优先用 Homebrew 的 `ffmpeg-full` 以获得 libass 字幕滤镜）；也可经 `--ffmpeg` 显式指定。
 > - **路径**：`--output-dir` 用原生绝对路径或相对路径均可；脚本通过 `__file__` 自动定位同级脚本，无需 `cd` 到技能目录。
 > - **MiSans 字体**：未安装时 `burn_subtitles.py` 自动下载安装，无需手动。
 
-### 步骤① 硬烧录字幕带检测(必跑)
-
-```bash
-python3 <skill-dir>/scripts/detect_hardsub_band.py \
-  "<job-dir>/<master>.master.mp4" \
-  --out "<job-dir>/hardsub_band.json" \
-  --ffmpeg "<ffmpeg 可执行文件路径>"
-```
-
-此步必须在渲染前执行。它基于画面文本密度带估算原视频内嵌硬字幕所在的竖向区域(y0/y1),输出 `hardsub_band.json`。后续渲染步骤会读取此 JSON 并将中文放到「对侧」(原字幕在底部→中文置顶;在顶部→置底)。**当无法判断原视频是否含硬字幕时(检测失败/不可靠),统一将中文字幕回退到画面底部放置**(不遮挡可能位于顶部的标题卡);能判断时则按上述规则做避让。
-
-### 步骤② 渲染字幕(必跑,必须传入 --hardsub 与 --font)
+### 步骤① 渲染字幕(必跑,字体参数必传)
 
 ```bash
 python3 <skill-dir>/scripts/subtitle_pipeline.py render \
   --manifest "<job-dir>/subtitles/subtitle-manifest.json" \
   --translations-dir "<job-dir>/subtitles/translation-output" \
   --output-dir "<job-dir>/subtitles/rendered" \
-  --font MiSans \
-  --hardsub "<job-dir>/hardsub_band.json"
+  --font MiSans
 ```
 
-**`--font MiSans` 和 `--hardsub` 是必传参数,不得省略。**
+**`--font MiSans` 是必传参数,不得省略。** 硬字幕检测功能已移除，中文字幕始终放置在画面底部。
 
 这一步生成:源语言 SRT、目标语言 SRT(`zh-CN.srt`)、双语 SRT,以及一份双语 `bilingual.ass` 和一份**仅中文** `zh-CN.ass`(**无源语言/英文行**)。烧录步骤使用的是 `zh-CN.ass`。
 
 **字幕样式(固定):** 中文使用 MiSans Bold,**黄色填充(&H0000FFFF) + 黑色描边(Outline=3)**,字号 60(横屏)/52(竖屏)。
 
-### 步骤③ 烧录(必跑,必须传入 --publish)
+### 步骤② 烧录(必跑,必须传入 --publish)
 
 > ⚠️ **智能体禁止询问是否发布。** `--publish` 是硬性要求，不是选项。中文标题由智能体自行翻译视频标题，无需征求用户同意（可在最终回复中告知已用的标题）。
 
@@ -177,7 +165,7 @@ python3 <skill-dir>/scripts/burn_subtitles.py \
 
 **`--publish` 是必传参数。** 它会在烧录校验通过后自动上传成品 MP4 + 中文封面(黄字黑描边标题 +「转载翻译」红角标)到 B 站。若没有缓存登录态,脚本会展示二维码等待用户扫码后上传(登录态会被缓存,下次免扫码)。绝不要臆造 ASS 文件名——校验报告锁定它。烧录脚本会:挑选 libass FFmpeg、输出码率封顶≤源码率、强制可定位关键帧间隔、校验校验报告;**若所需字体是 MiSans 且本机未安装,会自动从 `https://hyperos.mi.com/font-download/MiSans.zip` 下载、解压并安装到用户字体目录(含 `~/.fonts` 供 fontconfig/libass 扫描),再刷新字体缓存后继续**;仅当自动安装失败时才会失败退出(`--allow-missing-font` 可接受替换)。只打印 5% 进度里程碑,每 30–60 秒轮询一次。
 
-### 步骤④ 校验(必跑)
+### 步骤③ 校验(必跑)
 
 ```bash
 python3 <skill-dir>/scripts/verify_delivery.py "<job-dir>/download-manifest.json"
@@ -193,7 +181,7 @@ python3 <skill-dir>/scripts/verify_delivery.py "<job-dir>/download-manifest.json
 
 下面这些坑大多已经由代码本身解决（见上「运行环境要求」），此处保留为排障参考；**不要再逐命令加 `env -u PYTHONPATH` 之类绕过**——`common.install_safe_delete()` 已让临时文件清理在沙箱拦截时降级为「尽力而为」。
 
-1. **Python**：任意 3.10+，装好 `numpy`、`requests`、`bilibili_api`、`yt-dlp` 即可。`detect_*` / `subtitle_pipeline.py render` 需要 numpy；`publish_bilibili.py` 需要 `bilibili_api`。脚本通过 `__file__` 自动定位同级脚本，无需 `cd` 到技能目录。
+1. **Python**：任意 3.10+，装好 `numpy`、`requests`、`bilibili_api`、`yt-dlp` 即可。`subtitle_pipeline.py render` 需要 numpy；`publish_bilibili.py` 需要 `bilibili_api`。脚本通过 `__file__` 自动定位同级脚本，无需 `cd` 到技能目录。
 
 2. **安全删除沙箱（已代码修复）**：部分托管运行时会在 `sitecustomize.py` 把 `os.remove/unlink/rmdir/shutil.rmtree/pathlib.unlink` 改道到回收站；当环境无可用的回收站时会 `raise OSError`（FAIL_CLOSED），导致下载/烧录在收尾清理临时文件时崩溃。各脚本顶部已 `install_safe_delete()` 把删除降级为尽力而为，因此**不再需要** `env -u PYTHONPATH` 或 `CODEBUDDY_SAFE_DELETE_SANDBOX=0`。若你自己的环境有不同删除拦截，这段 shim 也能兜住。
 
