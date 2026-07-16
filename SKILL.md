@@ -20,6 +20,7 @@ description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt
 9. 烧录出的 MP4 **必须可定位拖拽**(seekable)。`burn_subtitles.py` 在每次编码时强制固定关键帧间隔(`-g` 约 2s,对 NVENC 另加 `-forced-idr`)。绝不可移除——否则 NVENC 只在第 0 帧放一个 IDR,文件无法拖动预览。
 10. 技能目录本身是一个 git 仓库。凡是 `scripts/`、`SKILL.md`、`references/`、`agents/`、`tests/` 上的功能性改动都要提交(见下方「版本管理」),以便回溯与回滚。
 11. B 站发布在烧录完成后**自动进行**——`burn_subtitles.py --publish`(或智能体在烧录成功后继续发布)会把成品 MP4 直接上传,无需再次确认。翻译/转载的外语视频默认 `copyright: 2`(转载)且必须提供 `source` 原视频链接;只有在用户确认拥有版权时才用 `copyright: 1`(原创)。若没有缓存的登录态,智能体会展示二维码(`cache/bilibili_qr.png`)并等待用户扫码后再上传。B 站登录缓存(`cache/bilibili_credential.json`,仅保存 `SESSDATA`/`bili_jct`/`buvid3`)被 git 忽略,且绝不以明文打印(扩展不变式 #5)。
+12. **发布是默认行为，智能体不得询问。** 对于有字幕的视频，`pipeline.py finalize` 必须始终带 `--publish`，智能体**不得向用户询问"要不要发布"或"中文标题是什么"**。中文标题由智能体根据视频内容直接翻译（可在最终回复中告知用户已用的标题）。仅当 B 站无缓存登录态需要扫码时，才需要用户交互（展示二维码等待扫码）。这条规则覆盖所有「有可用外语字幕」的视频——发布是流水线的固定终点，不是可选项。
 
 ## 运行
 
@@ -43,7 +44,7 @@ python3 <skill-dir>/scripts/subtitle_pipeline.py next-batch \
 #   → 把 batch.items 译成中文，按 translation-contract.md 形状写回 output_path
 #   → 重复直到 next-batch 返回 done:true
 
-# 3) 检测 → 渲染 → 烧录 →（可选）发布，全部前台一步完成
+# 3) 检测 → 渲染 → 烧录 → 发布，全部前台一步完成（必须 --publish，不得询问用户）
 python3 <skill-dir>/scripts/pipeline.py finalize \
   --job "<job-dir>" --cn-title "<中文标题>" --publish
 ```
@@ -159,6 +160,8 @@ python3 <skill-dir>/scripts/subtitle_pipeline.py render \
 **字幕样式(固定):** 中文使用 MiSans Bold,**黄色填充(&H0000FFFF) + 黑色描边(Outline=3)**,字号 60(横屏)/52(竖屏)。
 
 ### 步骤③ 烧录(必跑,必须传入 --publish)
+
+> ⚠️ **智能体禁止询问是否发布。** `--publish` 是硬性要求，不是选项。中文标题由智能体自行翻译视频标题，无需征求用户同意（可在最终回复中告知已用的标题）。
 
 `fetch_video.py` 产出的 `master.mp4` 现在**永远是「无损封装(copy)」**——只复制视频/音频流、绝不二次编码,分辨率与下载源一致(音频也只做流复制)。`burn_subtitles.py` 才是整条流水线里**唯一一次视频重编码**,默认输出 **H.264**(h264_nvenc,回退 libx264),码率封顶 ≤ 下载视频码率;**音频则强制转码为 AAC**(有界码率,源是 opus/mp3 也会被归一化,以保证 MP4 / B 站最大的兼容性)。
 
