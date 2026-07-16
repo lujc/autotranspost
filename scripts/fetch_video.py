@@ -27,12 +27,17 @@ from pathlib import Path
 from typing import Any, NamedTuple, Sequence
 
 
-# Default download format: best 1080p video + best audio. The master MP4 is then
-# transcoded to H.265 by default (see --master-codec) so the on-disk "download"
-# is 1080p HEVC unless the user overrides --format.
-DEFAULT_FORMAT = "bestvideo[height<=1080][fps>=60]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+# Default download format: prefer H.264 (avc1) at 1080p, 60fps when available,
+# falling back to any 1080p codec, then best <=1080p. The master MP4 is a
+# LOSSLESS remux (copy) by default (see --master-codec): no re-encode ever,
+# so the only video re-encode in the whole pipeline happens at the burn step.
+DEFAULT_FORMAT = (
+    "bestvideo[height<=1080][fps>=60][vcodec^=avc1]+bestaudio"
+    "/bestvideo[height<=1080][vcodec^=avc1]+bestaudio"
+    "/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+)
 FORMAT_SELECTOR = DEFAULT_FORMAT  # kept for back-compat references
-DEFAULT_MASTER_CODEC = "hevc"  # hevc | h264 | copy
+DEFAULT_MASTER_CODEC = "copy"  # copy | hevc | h264
 MANIFEST_NAME = "download-manifest.json"
 DELIVERABLES = ("full", "video", "subs", "bilingual-subs")
 SUBTITLE_ONLY_DELIVERABLES = frozenset({"subs", "bilingual-subs"})
@@ -2190,8 +2195,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_FORMAT,
         help=(
             "yt-dlp format selector for the downloaded video (default: "
-            f"{DEFAULT_FORMAT!r} = prefer 1080p60 when available, else best 1080p, else best <=1080p). "
-            "The master MP4 is then transcoded to H.265 by default; pass e.g. 'bv*+ba/b' for max quality."
+            f"{DEFAULT_FORMAT!r} = prefer 1080p H.264 (60fps if available), else any 1080p, else best <=1080p). "
+            "The master MP4 is a LOSSLESS remux (copy) by default (no re-encode); "
+            "override with --master-codec hevc/h264 only when you explicitly need a transcode."
         ),
     )
     parser.add_argument(
@@ -2199,8 +2205,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("hevc", "h264", "copy"),
         default=DEFAULT_MASTER_CODEC,
         help=(
-            "Codec for the on-disk master MP4 (default: hevc = H.265). 'copy' keeps "
-            "the source stream losslessly (no 1080p guarantee); 'h264' uses H.264."
+            "Codec for the on-disk master MP4 (default: copy = LOSSLESS remux, NO re-encode "
+            "of the video stream, resolution preserved as downloaded). 'hevc'/'h264' force a "
+            "transcode and should only be used when you explicitly need it."
         ),
     )
     parser.add_argument(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Burn one ASS subtitle track into a high-quality H.264 / H.265(HEVC) / AV1 MP4."""
+"""Burn one ASS subtitle track into a high-quality H.264 (default) / H.265(HEVC) / AV1 MP4."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-DEFAULT_ENCODER = "hevc_nvenc"
+DEFAULT_ENCODER = "h264_nvenc"
 PROGRESS_BAR_WIDTH = 20
 PROGRESS_STEP_PERCENT = 5
 MP4_COPY_AUDIO_CODECS = frozenset({"aac", "ac3", "alac", "eac3", "mp3", "opus"})
@@ -53,7 +53,7 @@ def _positive_crf(value: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Burn an ASS subtitle file exactly once into an H.264 / H.265(HEVC) / "
+            "Burn an ASS subtitle file exactly once into an H.264 (default) / H.265(HEVC) / "
             "AV1 MP4 while preserving the source dimensions and frame timing."
         )
     )
@@ -96,7 +96,8 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "After a successful burn, automatically upload the MP4 to Bilibili "
-            "(login via QR if no cached credential). Overrides the opt-in default."
+            "(login via QR if no cached credential). This is the default/recommended "
+            "behavior; omit only when you want a local-only burn."
         ),
     )
     parser.add_argument(
