@@ -1,5 +1,5 @@
 interface:
-  display_name: "AutoPublish"
-  short_description: "最高画质下载、模型双语字幕、自动烧录与可选 B 站发布"
-  default_prompt: "Use $autopublish to download this video at maximum quality and save its cover. If subtitles exist, use next-batch to translate every pending subtitle batch in order with the current session model, then let the renderer resegment it. Never read the full manifest. Burn bottom-stacked MiSans bilingual captions, show compact milestone progress, and continue until the delivery gate passes. Only publish to Bilibili when the user explicitly asks (opt-in)."
+  display_name: "AutoTransPost"
+  short_description: "默认 1080p(60fps 优先)下载、模型中文字幕、黄字黑描边自动烧录与烧录后自动 B 站发布"
+  default_prompt: "Use $autotranspost to download this video (default 1080p, prefer 60fps) and save its cover. If subtitles exist, use next-batch to translate every pending subtitle batch in order with the current session model, then let the renderer resegment it. Never read the full manifest. Burn Chinese-only (yellow fill + black outline) captions into a 1080p H.265 MP4 with bitrate capped at the source, auto-avoiding any detected hardcoded subtitle band, show compact milestone progress, and continue until the delivery gate passes. After the burn passes verification, automatically publish to Bilibili."
 

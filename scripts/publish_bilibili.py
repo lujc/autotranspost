@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """publish_bilibili.py — upload + submit a finished (subtitled) MP4 to Bilibili.
 
-This is an OPT-IN feature of the autopublish skill. It is NEVER called automatically;
-the user must explicitly ask to publish.
+Part of the autotranspost skill. By default this runs automatically after a
+successful burn (see burn_subtitles.py --publish); it can also be invoked
+manually to re-upload or publish a specific MP4.
 
 Subcommands:
   login [--generate] [--confirm] [--timeout S]

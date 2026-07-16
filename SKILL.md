@@ -1,9 +1,9 @@
 ---
-name: autopublish
-description: AutoPublish(自动发布)可从 YouTube、B 站及其他 yt-dlp 支持的平台下载视频(默认 1080p H.265、有 60fps 优先)、封面与原始字幕;调用当前会话模型翻译外语字幕(字幕仅保留中文,不带英文源行);将中文硬字幕烧录进 1080p H.265 MP4(码率不超过下载视频,字幕为黄色+黑描边);并在烧录完成后自动发布到 B 站。适用于视频下载、仅视频/仅字幕交付、Chrome 鉴权下载、中文硬字幕生成、硬烧录交付,以及 B 站自动发布。
+name: autotranspost
+description: AutoTransPost(自动翻译发布)可从 YouTube、B 站及其他 yt-dlp 支持的平台下载视频(默认 1080p H.265、有 60fps 优先)、封面与原始字幕;调用当前会话模型翻译外语字幕(字幕仅保留中文,不带英文源行);将中文硬字幕烧录进 1080p H.265 MP4(码率不超过下载视频,字幕为黄色+黑描边);并在烧录完成后自动发布到 B 站。适用于视频下载、仅视频/仅字幕交付、Chrome 鉴权下载、中文硬字幕生成、硬烧录交付,以及 B 站自动发布。
 ---
 
-# AutoPublish(自动发布)
+# AutoTransPost(自动翻译发布)
 
 每个任务目录处理一个已授权的视频,并跑完适用的完整流水线。
 
@@ -170,7 +170,7 @@ git log --oneline
 - 提交信息 = `<area>: <改了什么>`(例如 `burn:`、`render:`、`docs:`、`skill:`)。
 - 功能性改动前后各提交一次,使 diff 可审阅。
 - 给稳定的基线打 tag(例如 `v1.0`),以便用 `git checkout v1.0` 还原。
-- 仓库级的 git 身份(`autopublish-skill <autopublish@local>`)会在首次提交时自动设置;若你想用自己的,用 `git config user.name/user.email` 覆盖。
+- 仓库级的 git 身份(`autotranspost-skill <autotranspost@local>`)会在首次提交时自动设置;若你想用自己的,用 `git config user.name/user.email` 覆盖。
 
 ## 发布到 B 站(烧录后自动)
 
