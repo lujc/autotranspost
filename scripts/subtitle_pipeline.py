@@ -225,10 +225,28 @@ def is_non_dialogue_annotation(text: str) -> bool:
     return not any(character.isalnum() for character in remainder)
 
 
+def _strip_non_dialogue_annotations(text: str) -> str:
+    """Scrub inline sound-description tokens while keeping the dialogue.
+
+    YouTube auto-captions embed markers such as ``[Music]``, ``[Applause]``,
+    ``【音乐】`` or bare music notes ``♪`` *inside* spoken lines whenever music
+    overlaps speech (e.g. ``"It can really take [music]"``). Unlike
+    :func:`is_non_dialogue_annotation`, which only drops cues that are entirely
+    annotation, this also removes the embedded tokens so the translated
+    subtitle never shows a stray ``[music]`` floating in a Chinese sentence.
+    Returns the cleaned text (may be empty when the cue was pure annotation).
+    """
+    cleaned = _ANNOTATION_BRACKETS.sub(" ", text)
+    cleaned = _MUSIC_NOTES.sub(" ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _build_cue_ledger(parsed: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     cues: list[dict[str, Any]] = []
     for raw_cue in parsed:
-        if is_non_dialogue_annotation(raw_cue["text"]):
+        cleaned = _strip_non_dialogue_annotations(raw_cue["text"])
+        if not cleaned:
+            # Pure annotation cue (a whole line of [Music]) -> nothing to show.
             continue
         payload = {
             "position": raw_cue["position"],
@@ -237,7 +255,7 @@ def _build_cue_ledger(parsed: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
             "start_ms": raw_cue["start_ms"],
             "end_ms": raw_cue["end_ms"],
             "settings": raw_cue["settings"],
-            "text": raw_cue["text"],
+            "text": cleaned,
         }
         cue_sha256 = _sha256_json(payload)
         cues.append(
