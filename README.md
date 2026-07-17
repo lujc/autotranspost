@@ -127,7 +127,7 @@ pip install -r requirements.txt
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/lujc/autotranspost.git
+git clone https://github.com/autotranspost-skill/autotranspost.git
 cd autotranspost
 
 # 2. 安装 Python 依赖
@@ -240,7 +240,7 @@ autotranspost/
 
 ## 许可证 | License
 
-[MIT](LICENSE) © 2026 lujc
+[MIT](LICENSE) © 2026 autotranspost-skill
 
 ---
 
