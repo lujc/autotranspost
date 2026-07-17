@@ -211,6 +211,14 @@ python3 <skill-dir>/scripts/publish_bilibili.py status
 - 中文封面需要 Pillow + CJK 字体（Windows 自带 `simhei.ttf`/`msyh.ttc`）。
 - 需要网络出口至 `member`/`api`/`passport`.bilibili.com 与 `upos-*.bilivideo.com`。
 
+### 已知限制：纯换封面（不重传视频）当前不可行
+
+> 已实测（2026-07）。**不要**尝试用 cookie 登录做「只改封面不重新上传视频」——B 站 2026 年已堵死这条路：
+> - web 编辑接口 `x/vu/web/edit` 必须带 `videos[].filename`（原始上传 upos key），该 key 只能从 `archive/view` 编辑预填接口拿到，而 `x/member/web/arc/view`、`x/creator/arc/view`、`x/vu/web/archive/view` 等**全部返回 404**（已下线）。缺它报 `21011/21015/21036`。
+> - 唯一「封面可选、不需 upos key」的接口是开放平台 `https://member.bilibili.com/arcopen/fn/archive/edit`，但它要求 OAuth App 凭证 + v2 签名（cookie 登录返回 `127308 签名版本过老`），cookie 登录调不动。
+> - 结论：**修封面只能重新 `publish`（全量重传）**，或用户在 B 站创作者中心网页手动改封面/删稿。删稿 API 同样 404，只能网页手动删。
+> - 若未来要做纯换封面：需注册 B 站开放平台应用、申请 `ARC_BASE` 权限、实现请求 v2 签名，再调 `arcopen/fn/archive/edit`（`cover` 可选，传 `resource_id`+`title`+`tid`+`cover` 即可）。这是独立工程，不属于 cookie 登录能力范围。
+
 ## 版本管理
 
 技能目录是 git 仓库。改动后提交：
