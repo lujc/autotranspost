@@ -177,8 +177,11 @@ def parse_srt_bytes(raw: bytes) -> list[dict[str, Any]]:
 
         original_index = lines[0] if timing_index == 1 else None
         text = "\n".join(lines[timing_index + 1 :])
-        if text == "":
-            raise PipelineError(f"SRT cue {position} has empty source text")
+        if text.strip() == "":
+            # Skip blank cues (silent/music segments) instead of failing the
+            # whole track — they carry no translatable dialogue. The source
+            # SRT file is left byte-for-byte unchanged.
+            continue
         start_ms = _parse_timestamp(timing_match.group("start"))
         end_ms = _parse_timestamp(timing_match.group("end"))
         if end_ms <= start_ms:
